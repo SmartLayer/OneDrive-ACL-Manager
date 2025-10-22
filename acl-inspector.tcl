@@ -71,6 +71,7 @@ set ::oauth(token_url)     "https://login.microsoftonline.com/common/oauth2/v2.0
 set ::oauth(scope)         "Files.Read Files.ReadWrite Files.ReadWrite.All Sites.Manage.All offline_access"
 set ::oauth(auth_code)     ""
 set ::serverSock           ""
+set ::oauth_modal_result   0  ;# Result from OAuth modal dialog (0=failure/cancel, 1=success)
 
 # GUI widget variables (will be set in GUI mode)
 set remote_entry ""
@@ -1009,23 +1010,80 @@ proc oauth_exchange_token {code} {
 }
 
 proc acquire_elevated_token {} {
-    # Orchestrate full OAuth flow
+    # Show modal dialog with authentication options
+    # User chooses: browser auth OR reload token file
     global oauth gui_mode
     
-    update_status "Starting OAuth authentication..." blue
+    update_status "Elevated permissions required - please choose authentication method..." blue
+    
+    # Show modal dialog with two action buttons
+    # Dialog handles everything: OAuth server, browser launch, token reload, etc.
+    set success [show_oauth_modal_dialog]
+    
+    if {$success} {
+        update_status "✅ Authentication successful!" green
+    } else {
+        update_status "Authentication cancelled or failed" orange
+        cleanup_oauth_server
+    }
+    
+    return $success
+}
+
+# ============================================================================
+# Modal OAuth Dialog with Token Reload Support
+# ============================================================================
+
+proc cleanup_oauth_server {} {
+    # Clean up OAuth server socket without resetting auth_code
+    # Preserves the OAuth result if already set
+    global serverSock
+    
+    if {[info exists serverSock] && $serverSock ne ""} {
+        catch {close $serverSock}
+        set serverSock ""
+        debug_log "OAuth server socket closed"
+    }
+}
+
+proc oauth_modal_start_browser_auth {modal_window status_label browser_btn reload_btn} {
+    # Start browser authentication when user clicks the button
+    debug_log "oauth_modal_start_browser_auth called with args: modal=$modal_window, status=$status_label, browser_btn=$browser_btn, reload_btn=$reload_btn"
+    
+    global oauth oauth_modal_result
+    if {[info exists oauth_modal_result]} {
+        debug_log "oauth_modal_result exists, current value: $oauth_modal_result"
+    } else {
+        debug_log "oauth_modal_result DOES NOT EXIST"
+    }
+    
+    if {[catch {
+        set oauth_modal_result 0  # Default to failure
+        debug_log "Successfully set oauth_modal_result to 0"
+    } err]} {
+        debug_log "ERROR setting oauth_modal_result: $err"
+        debug_log "Error info: $::errorInfo"
+    }
+    
+    # Disable browser button (can't start twice)
+    $browser_btn configure -state disabled
+    $status_label configure -text "Starting OAuth server..." -foreground blue
+    update
     
     # Start local server
     if {[oauth_start_local_server] eq ""} {
-        return 0
+        $status_label configure -text "Failed to start OAuth server" -foreground red
+        $browser_btn configure -state normal
+        return
     }
     
-    # Build auth URL and open browser
+    # Build auth URL
     set auth_url [oauth_build_auth_url]
     
-    update_status "Opening browser for authentication..." blue
+    $status_label configure -text "Opening browser for authentication..." -foreground blue
+    update
     
     # Open browser (platform-specific)
-    set browser_error 0
     if {[catch {
         if {$::tcl_platform(platform) eq "windows"} {
             exec cmd /c start $auth_url &
@@ -1034,111 +1092,263 @@ proc acquire_elevated_token {} {
         } else {
             exec xdg-open $auth_url &
         }
-    } error] != 0} {
-        update_status "Error opening browser: $error" red
-        global serverSock
-        if {$serverSock ne ""} {
-            catch {close $serverSock}
-            set serverSock ""
-        }
-        set browser_error 1
+    } error]} {
+        $status_label configure -text "Error opening browser: $error" -foreground red
+        cleanup_oauth_server
+        $browser_btn configure -state normal
+        return
     }
     
-    if {$browser_error} {
-        return 0
-    }
+    $status_label configure -text "Waiting for authentication in browser..." -foreground blue
+    update
     
-    update_status "Waiting for authentication in browser..." blue
-    
-    # Wait for callback (with timeout)
-    set timeout_ms 120000  ;# 2 minutes
+    # Start non-blocking completion checker
     set start_time [clock milliseconds]
+    after 100 [list oauth_modal_check_completion $modal_window $status_label $start_time]
+}
+
+proc oauth_modal_check_completion {modal_window status_label start_time} {
+    # Non-blocking periodic check of OAuth completion status
+    # Called via 'after' to avoid blocking the event loop
+    global oauth oauth_modal_result
     
-    while {$oauth(auth_code) eq ""} {
-        # Check if main window still exists
-        if {![winfo exists .]} {
-            # Window was closed, clean up and exit
-            debug_log "Main window destroyed during OAuth wait"
-            global serverSock
-            if {$serverSock ne ""} {
-                catch {close $serverSock}
-                set serverSock ""
+    # Check if window still exists (user might have closed it)
+    if {![winfo exists $modal_window]} {
+        debug_log "Modal window destroyed during OAuth wait"
+        cleanup_oauth_server
+        set oauth(auth_code) "CANCELLED"
+        return
+    }
+    
+    # Check OAuth status
+    if {$oauth(auth_code) ne ""} {
+        if {$oauth(auth_code) eq "CANCELLED"} {
+            # User cancelled
+            debug_log "OAuth flow cancelled"
+            cleanup_oauth_server
+            set oauth_modal_result 0
+            destroy $modal_window
+            return
+        } else {
+            # Got auth code - proceed to token exchange
+            $status_label configure -text "Exchanging authorization code for token..." -foreground blue
+            update
+            
+            if {[catch {
+                set token_dict [oauth_exchange_token $oauth(auth_code)]
+                save_token_json $token_dict
+                set oauth(auth_code) ""
+                
+                # Update token capability
+                global token_capability remote_entry
+                set token_result [get_access_token_with_capability [$remote_entry get]]
+                set token_capability [lindex $token_result 1]
+                
+                # Success - close dialog immediately (no confirmation needed)
+                set oauth_modal_result 1
+                # Disable WM_DELETE_WINDOW before destroying to avoid triggering CANCELLED
+                wm protocol $modal_window WM_DELETE_WINDOW {}
+                destroy $modal_window
+            } error]} {
+                $status_label configure -text "Token exchange failed: $error" -foreground red
+                set oauth(auth_code) ""
+                cleanup_oauth_server
+                after 2500 [list destroy $modal_window]
+                set oauth_modal_result 0
             }
-            exit 0
-        }
-        
-        # Try to update event loop, handle errors gracefully
-        set update_error 0
-        if {[catch {update} error] != 0} {
-            # Event loop failed, clean up
-            debug_log "Event loop error during OAuth wait: $error"
-            global serverSock
-            if {$serverSock ne ""} {
-                catch {close $serverSock}
-                set serverSock ""
-            }
-            set update_error 1
-        }
-        
-        if {$update_error} {
-            return 0
-        }
-        
-        after 100
-        
-        if {[expr {[clock milliseconds] - $start_time}] > $timeout_ms} {
-            update_status "Authentication timeout - please try again" red
-            global serverSock
-            if {$serverSock ne ""} {
-                catch {close $serverSock}
-                set serverSock ""
-            }
-            return 0
+            return
         }
     }
     
-    # Check if authentication was cancelled
-    if {$oauth(auth_code) eq "CANCELLED"} {
-        debug_log "OAuth flow cancelled by user"
-        update_status "Authentication cancelled" orange
-        set oauth(auth_code) ""
-        return 0
+    # Check timeout (120 seconds)
+    set elapsed [expr {[clock milliseconds] - $start_time}]
+    if {$elapsed > 120000} {
+        $status_label configure -text "Authentication timeout - please try again or reload token file" -foreground red
+        cleanup_oauth_server
+        # Don't close on timeout - let user try reload or close manually
+        return
     }
     
-    update_status "Exchanging authorization code for token..." blue
+    # Update status with elapsed time
+    set seconds [expr {$elapsed / 1000}]
+    $status_label configure -text "Waiting for browser authentication... ($seconds/120 seconds)" -foreground blue
     
-    # Exchange code for token
-    set success 0
-    set error_message ""
+    # Schedule next check
+    after 100 [list oauth_modal_check_completion $modal_window $status_label $start_time]
+}
+
+proc oauth_modal_reload_token {modal_window status_label reload_btn} {
+    # Handle token reload from file with validation
+    debug_log "oauth_modal_reload_token called with args: modal=$modal_window, status=$status_label, reload_btn=$reload_btn"
+    
+    global oauth remote_entry token_capability oauth_modal_result
+    if {[info exists oauth_modal_result]} {
+        debug_log "oauth_modal_result exists, current value: $oauth_modal_result"
+    } else {
+        debug_log "oauth_modal_result DOES NOT EXIST"
+    }
     
     if {[catch {
-        set token_dict [oauth_exchange_token $oauth(auth_code)]
-        save_token_json $token_dict
-        
-        # Reset auth code
-        set oauth(auth_code) ""
-        
-        update_status "✅ Token acquired successfully!" green
-        
-        # Update capability and enable edit mode
-        global token_capability remote_entry
-        debug_log "About to call get_access_token_with_capability..."
-        set result [get_access_token_with_capability [$remote_entry get]]
-        debug_log "get_access_token_with_capability returned: $result"
-        set token_capability [lindex $result 1]
-        debug_log "Token capability set to: $token_capability"
-        
-        update_status "✅ Token acquired and saved successfully!" green
-        
-        set success 1
-    } error_message]} {
-        debug_log "ERROR in acquire_elevated_token catch block: $error_message"
-        update_status "Token exchange failed: $error_message" red
-        set oauth(auth_code) ""
-        set success 0
+        set oauth_modal_result 0  # Default to failure
+        debug_log "Successfully set oauth_modal_result to 0"
+    } err]} {
+        debug_log "ERROR setting oauth_modal_result: $err"
+        debug_log "Error info: $::errorInfo"
     }
     
-    return $success
+    # Disable button during check
+    $reload_btn configure -state disabled
+    $status_label configure -text "Checking token.json file..." -foreground blue
+    update
+    
+    # Check for race condition - auth already completing
+    if {[info exists oauth(auth_code)] && $oauth(auth_code) ne "" && $oauth(auth_code) ne "CANCELLED"} {
+        $status_label configure -text "Browser authentication already completing..." -foreground orange
+        $reload_btn configure -state normal
+        return
+    }
+    
+    # Try to load token
+    if {![file exists "./token.json"]} {
+        $status_label configure -text "Error: token.json file not found in current directory" -foreground red
+        $reload_btn configure -state normal
+        return
+    }
+    
+    # Load and validate token
+    if {[catch {
+        set token_result [get_access_token_with_capability [$remote_entry get]]
+        set access_token [lindex $token_result 0]
+        set capability [lindex $token_result 1]
+        
+        if {$access_token eq ""} {
+            error "Invalid or expired token"
+        }
+        
+        if {$capability ne "full"} {
+            error "Token has insufficient permissions (scope: $capability)\n\nToken must have Files.ReadWrite.All and Sites.Manage.All scopes"
+        }
+        
+        # Success - valid token with full capability
+        set token_capability $capability
+        
+        # Cleanup OAuth server and signal success
+        cleanup_oauth_server
+        set oauth(auth_code) "CANCELLED"  ;# Stop any pending OAuth wait
+        
+        # Close dialog immediately (no confirmation needed)
+        set oauth_modal_result 1
+        # Disable WM_DELETE_WINDOW before destroying to avoid triggering CANCELLED
+        wm protocol $modal_window WM_DELETE_WINDOW {}
+        destroy $modal_window
+        
+    } error]} {
+        # Failed to load valid token
+        $status_label configure -text "Error: $error" -foreground red
+        $reload_btn configure -state normal
+    }
+}
+
+proc show_oauth_modal_dialog {} {
+    # Display modal dialog with two authentication options
+    # Returns: 1 if authentication succeeded (OAuth or reload), 0 otherwise
+    debug_log "show_oauth_modal_dialog called"
+    
+    global oauth oauth_modal_result
+    if {[info exists oauth_modal_result]} {
+        debug_log "oauth_modal_result exists, current value: $oauth_modal_result"
+    } else {
+        debug_log "oauth_modal_result DOES NOT EXIST"
+    }
+    
+    # Reset oauth state and result
+    set oauth(auth_code) ""
+    
+    if {[catch {
+        set oauth_modal_result 0
+        debug_log "Successfully set oauth_modal_result to 0 in show_oauth_modal_dialog"
+    } err]} {
+        debug_log "ERROR setting oauth_modal_result in show_oauth_modal_dialog: $err"
+        debug_log "Error info: $::errorInfo"
+    }
+    
+    # Create modal toplevel
+    set modal [toplevel .oauth_modal]
+    wm title $modal "Elevated Permissions Required"
+    wm transient $modal .
+    wm protocol $modal WM_DELETE_WINDOW {
+        # User closed window - cancel OAuth
+        debug_log "WM_DELETE_WINDOW triggered"
+        global oauth oauth_modal_result
+        debug_log "In WM_DELETE_WINDOW: oauth_modal_result exists? [info exists oauth_modal_result]"
+        
+        if {[catch {
+            set oauth(auth_code) "CANCELLED"
+            debug_log "Set oauth(auth_code) to CANCELLED"
+            set oauth_modal_result 0
+            debug_log "Set oauth_modal_result to 0"
+        } err]} {
+            debug_log "ERROR in WM_DELETE_WINDOW: $err"
+            debug_log "Error info: $::errorInfo"
+        }
+    }
+    
+    # Make it modal
+    grab set $modal
+    
+    # Raise to top
+    raise $modal
+    focus $modal
+    
+    # Main frame with padding
+    set main_frame [ttk::frame $modal.main -padding 20]
+    pack $main_frame -fill both -expand yes
+    
+    # Title
+    ttk::label $main_frame.title -text "This operation requires elevated OneDrive permissions" \
+        -font {TkDefaultFont 11 bold} -wraplength 510
+    pack $main_frame.title -pady {0 20}
+    
+    # Instructions
+    ttk::label $main_frame.instructions \
+        -text "Please choose an authentication method:" \
+        -justify left
+    pack $main_frame.instructions -anchor w -pady {0 15}
+    
+    # Button frame for the two main action buttons
+    set action_frame [ttk::frame $main_frame.actions]
+    pack $action_frame -fill x -pady {0 15}
+    
+    # Browser authentication button
+    set browser_btn [ttk::button $action_frame.browser \
+        -text "Authenticate with Browser" \
+        -width 30]
+    pack $browser_btn -pady 5 -anchor center
+    
+    # Reload token button
+    set reload_btn [ttk::button $action_frame.reload \
+        -text "Reload Token File" \
+        -width 30]
+    pack $reload_btn -pady 5 -anchor center
+    
+    # Status label (shows progress after user clicks a button)
+    set status_label [ttk::label $main_frame.status \
+        -text "" \
+        -foreground blue -justify center]
+    pack $status_label -pady {10 10}
+    
+    # Configure button commands after creating status_label
+    $browser_btn configure -command [list oauth_modal_start_browser_auth $modal $status_label $browser_btn $reload_btn]
+    $reload_btn configure -command [list oauth_modal_reload_token $modal $status_label $reload_btn]
+    
+    # Wait for dialog to close (modal loop)
+    tkwait window $modal
+    
+    # Release grab
+    catch {grab release $modal}
+    
+    # Return result from global variable
+    return $oauth_modal_result
 }
 
 proc make_http_request {url headers {method GET} {body ""}} {
@@ -1290,7 +1500,7 @@ proc strip_explicit_permissions {item_id access_token} {
 # ============================================================================
 
 proc ensure_edit_capability {} {
-    # Check if we have edit capability, prompt for OAuth if needed
+    # Check if we have edit capability, trigger OAuth flow if needed
     # Returns: 1 if we have edit capability, 0 if user cancelled or failed
     global token_capability remote_entry
     
@@ -1305,21 +1515,14 @@ proc ensure_edit_capability {} {
         return 1
     }
     
-    # Need to acquire elevated token
-    set response [tk_messageBox -type yesno -icon question \
-        -title "Elevated Permissions Required" \
-        -message "This operation requires elevated OneDrive permissions.\n\nWould you like to authenticate in your browser to acquire an editing token?"]
-    
-    if {$response eq "yes"} {
-        # Start OAuth flow
-        if {[acquire_elevated_token]} {
-            return 1
-        } else {
-            return 0
-        }
+    # Need to acquire elevated token - show modal directly
+    # Modal provides both options: browser auth OR token file reload
+    # User can cancel if they don't want to proceed
+    if {[acquire_elevated_token]} {
+        return 1
+    } else {
+        return 0
     }
-    
-    return 0
 }
 
 proc on_invite_user_click {} {
@@ -1340,7 +1543,6 @@ proc on_invite_user_click {} {
     # Create dialog window
     set dialog [toplevel .invite_dialog]
     wm title $dialog "Invite User"
-    wm geometry $dialog "400x200"
     wm transient $dialog .
     
     # Email entry

@@ -1,8 +1,83 @@
 # ACL Editing Implementation Summary
 
-## Completed: 2025-10-22 (Revised for better UX)
+## Completed: 2025-10-22 (Revised for Modal OAuth Dialog)
 
-This document summarizes the successful implementation of ACL editing functionality in the OneDrive ACL Inspector with a task-oriented, modeless interface.
+This document summarizes the successful implementation of ACL editing functionality in the OneDrive ACL Inspector with a task-oriented, modeless interface and improved OAuth authentication flow.
+
+## Latest Update: Modal OAuth Dialog (2025-10-22)
+
+### Modal Authentication Dialog with Token Reload
+
+**New Procedures**:
+- `cleanup_oauth_server()` - Centralized OAuth server cleanup utility
+- `oauth_modal_start_browser_auth()` - Initiates browser authentication when user clicks button
+- `oauth_modal_check_completion()` - Non-blocking periodic checker using `after`
+- `oauth_modal_reload_token()` - Token reload handler with validation
+- `show_oauth_modal_dialog()` - Main modal dialog for authentication
+
+**Key Improvements**:
+
+1. **Two-Button Choice Design**: 
+   - Dialog presents two clear action buttons: "Authenticate with Browser" and "Reload Token File"
+   - Browser authentication only starts WHEN user clicks the button (not automatically)
+   - User can choose whichever method suits their situation
+   - Can close dialog to cancel (no destructive action taken by showing modal)
+
+2. **Modal Blocking**: Dialog uses `grab set` to prevent user interaction with main window during authentication, eliminating race conditions and user errors
+
+3. **Cross-PC Token Support**: "Reload Token File" button allows users to:
+   - Authenticate on one computer
+   - Copy token.json to another computer
+   - Load the token without re-authenticating
+
+4. **Token Validation**: Reload function validates:
+   - Token file exists and is valid JSON
+   - Token has required scopes (Files.ReadWrite.All + Sites.Manage.All)
+   - Shows clear error messages for each failure mode
+   - Re-enables button after errors for retry
+
+5. **Race Condition Handling**: Detects when OAuth callback arrives while user is loading token, prevents conflicts
+
+6. **Timeout Behavior**: After 120 seconds timeout, dialog stays open with option to reload token file rather than forcing user to restart
+
+7. **Auto-Close on Success**: When authentication succeeds (via browser OR reload), dialog closes automatically - no confirmation click needed
+
+8. **Better UX**:
+   - Real-time status updates (elapsed time counter during browser auth)
+   - Clear instructions about both authentication options
+   - Automatic cleanup of OAuth server on success/failure/cancel
+   - Progress feedback during token exchange
+
+**Updated Procedures**:
+- `acquire_elevated_token()` - Simplified to just show modal dialog
+- `ensure_edit_capability()` - Removed redundant confirmation dialog, goes directly to modal
+
+**Design Decisions**:
+
+1. **Eliminated "Can I ask a question?" anti-pattern**
+   - Before: Two dialogs (confirmation + modal with options)  
+   - After: Single modal with both authentication options
+   - Rationale: Nothing destructive happens by showing the modal, so confirmation is unnecessary
+
+2. **No hardcoded window geometries**
+   - All dialog windows (modal OAuth, invite user, etc.) have no `wm geometry` calls
+   - Windows size themselves based on content and padding
+   - Rationale: Users have different display scaling factors; hardcoded pixel dimensions become unusably small on high-DPI displays with scaling enabled
+   - The window manager and Tk's layout system handle proper sizing automatically
+
+3. **Global variable for event-driven communication**
+   - Uses `oauth_modal_result` global variable for communication between callbacks and main dialog
+   - Rationale: Button commands execute in global scope (event loop), not local procedure scope
+   - Tried local variable with `upvar` but fails due to Tcl's event-driven architecture
+   - Global variable initialized at top level (line 74) ensures it exists before any code runs
+
+**Technical Challenges Overcome**:
+
+1. **Variable Scope in Event Handlers**: Initial attempt used local variable with `upvar`, but button commands execute in global scope. Solution: Use global `oauth_modal_result` variable.
+
+2. **WM_DELETE_WINDOW Interference**: When destroying modal on success, the window close protocol triggered and set `oauth(auth_code) = "CANCELLED"`, interfering with success flow. Solution: Disable `WM_DELETE_WINDOW` protocol before destroying window on success.
+
+3. **Event-Driven vs Blocking**: Original code used blocking `while` loop with `update` calls, which doesn't truly block interaction. Solution: Use `after`-based non-blocking checks combined with `grab set` for true modal behavior.
 
 ## Features Implemented
 
