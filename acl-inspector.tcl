@@ -40,6 +40,7 @@ package require tls
 ::http::register https 443 [list ::tls::socket]
 
 # Global variables
+set debug_mode 0  ;# Set to 1 to enable debug logging
 set access_token ""
 set item_path ""
 set remote_name "OneDrive"
@@ -173,11 +174,81 @@ if {$gui_mode} {
     ttk::style configure Treeview -rowheight $h
 }
 
+# ============================================================================
+# Utility Functions
+# ============================================================================
+
+proc debug_log {message} {
+    global debug_mode
+    if {$debug_mode} {
+        puts "DEBUG: $message"
+    }
+}
+
+proc url_encode {path} {
+    # URL encode a path, handling Unicode characters properly
+    set encoded ""
+    foreach char [split $path ""] {
+        if {$char eq " "} {
+            append encoded "%20"
+        } elseif {$char eq "/"} {
+            append encoded "/"
+        } elseif {[string is ascii $char] && ([string is alnum $char] || $char eq "-" || $char eq "_" || $char eq ".")} {
+            append encoded $char
+        } else {
+            # For non-ASCII characters, use proper UTF-8 encoding
+            set utf8_bytes [encoding convertto utf-8 $char]
+            foreach byte [split $utf8_bytes ""] {
+                append encoded [format "%%%02X" [scan $byte %c]]
+            }
+        }
+    }
+    return $encoded
+}
+
+proc extract_user_info {perm} {
+    # Extract user display name and email from a permission object
+    # Returns {displayName email} or {"N/A" "N/A"}
+    if {[dict exists $perm grantedTo user]} {
+        set user [dict get $perm grantedTo user]
+        return [list [dict get $user displayName] [dict get $user email]]
+    } elseif {[dict exists $perm grantedToIdentities]} {
+        set identities [dict get $perm grantedToIdentities]
+        if {[llength $identities] > 0} {
+            set identity [lindex $identities 0]
+            if {[dict exists $identity user]} {
+                set user [dict get $identity user]
+                return [list [dict get $user displayName] [dict get $user email]]
+            }
+        }
+    }
+    return [list "N/A" "N/A"]
+}
+
+proc is_owner_permission {perm} {
+    # Check if permission has owner role
+    set roles [dict get $perm roles]
+    return [expr {[lsearch $roles "owner"] >= 0}]
+}
+
+proc is_inherited_permission {perm} {
+    # Check if permission is inherited
+    return [dict exists $perm inheritedFrom]
+}
+
+proc build_graph_api_url {endpoint} {
+    # Build Microsoft Graph API URL
+    return "https://graph.microsoft.com/v1.0$endpoint"
+}
+
+# ============================================================================
+# Core Functions
+# ============================================================================
+
 proc update_status {message {color blue}} {
     global status_label gui_mode
     if {$gui_mode} {
         $status_label configure -text $message -fg $color
-        puts "GUI STATUS: $message (color: $color)"
     } else {
         puts "STATUS: $message"
     }
@@ -201,7 +272,7 @@ proc load_folder_contents {folder_id folder_path} {
         return
     }
     
-    puts "GUI: Loading folder contents - ID: '$folder_id', Path: '$folder_path'"
+    debug_log "GUI: Loading folder contents - ID: '$folder_id', Path: '$folder_path'"
     
     set current_folder_id $folder_id
     set current_folder_path $folder_path
@@ -239,19 +310,19 @@ proc fetch_remote_folder_contents {folder_id} {
         return
     }
     
-    puts "GUI: Fetching remote folder contents for ID: $folder_id"
+    debug_log "GUI: Fetching remote folder contents for ID: $folder_id"
     
     # Get access token
     set access_token [get_access_token [$remote_entry get]]
     if {$access_token eq ""} {
-        puts "GUI: No access token available"
+        debug_log "GUI: No access token available"
         $folder_listbox delete 0 end
         $folder_listbox insert end "❌ No access token"
         update_status "No access token available" red
         return
     }
     
-    puts "GUI: Got access token, making API request for children..."
+    debug_log "GUI: Got access token, making API request for children..."
     
     # Make API call to get children
     set headers [list Authorization "Bearer $access_token"]
@@ -278,18 +349,18 @@ proc fetch_remote_folder_contents {folder_id} {
         set children_dict [json::json2dict $data]
         set children [dict get $children_dict value]
         
-        # DEBUG: Log children for problematic folder
+        # DEBUG: Log children for problematic folder (duplicate path bug investigation)
         if {[string match "*I.E. Digital Services*" $current_folder_path] || [string match "*safaa0cec*" $folder_id]} {
-            puts "DEBUG: Current folder ID: $folder_id"
-            puts "DEBUG: Current folder path: $current_folder_path"
-            puts "DEBUG: Number of children: [llength $children]"
+            debug_log "Current folder ID: $folder_id"
+            debug_log "Current folder path: $current_folder_path"
+            debug_log "Number of children: [llength $children]"
             foreach child $children {
                 if {[dict exists $child folder]} {
                     set child_name [dict get $child name]
                     set child_id [dict get $child id]
-                    puts "DEBUG: Child folder: name='$child_name' id='$child_id'"
+                    debug_log "Child folder: name='$child_name' id='$child_id'"
                     if {[dict exists $child remoteItem]} {
-                        puts "DEBUG:   -> This is a SHORTCUT (remoteItem exists)"
+                        debug_log "  -> This is a SHORTCUT (remoteItem exists)"
                     }
                 }
             }
@@ -442,24 +513,24 @@ proc navigate_to_typed_path {path} {
         return
     }
     
-    puts "GUI: Navigating to typed path: '$path'"
+    debug_log "GUI: Navigating to typed path: '$path'"
     
     # Navigate to the typed path by getting the folder ID
     set access_token [get_access_token [$remote_entry get]]
     if {$access_token eq ""} {
-        puts "GUI: No access token available"
+        debug_log "GUI: No access token available"
         update_status "No access token available" red
         return
     }
     
-    puts "GUI: Got access token, making API request..."
+    debug_log "GUI: Got access token, making API request..."
     
     # Get item info for the typed path
     set headers [list Authorization "Bearer $access_token"]
-    set encoded_path [string map {" " "%20"} $path]
+    set encoded_path [url_encode $path]
     set item_url "https://graph.microsoft.com/v1.0/me/drive/root:/$encoded_path"
     
-    puts "GUI: API URL: $item_url"
+    debug_log "GUI: API URL: $item_url"
     
     # Use the existing make_http_request function
     set result [make_http_request $item_url $headers]
@@ -467,20 +538,20 @@ proc navigate_to_typed_path {path} {
     set status [lindex $result 0]
     set data [lindex $result 1]
     
-    puts "GUI: API response status: $status"
+    debug_log "GUI: API response status: $status"
     
     if {$status eq "200"} {
         set item_data [json::json2dict $data]
         if {[dict exists $item_data folder]} {
             set folder_id [dict get $item_data id]
-            puts "GUI: Found folder ID: $folder_id"
+            debug_log "GUI: Found folder ID: $folder_id"
             load_folder_contents $folder_id $path
         } else {
-            puts "GUI: Path '$path' is not a folder"
+            debug_log "GUI: Path '$path' is not a folder"
             update_status "Path '$path' is not a folder" red
         }
     } else {
-        puts "GUI: Path '$path' not found - Status: $status, Data: $data"
+        debug_log "GUI: Path '$path' not found - Status: $status, Data: $data"
         update_status "Path '$path' not found" red
     }
 }
@@ -502,24 +573,7 @@ proc display_acl_cli {permissions item_id} {
         set roles_str [join $roles ", "]
         
         # Get user information
-        set user_name "N/A"
-        set user_email "N/A"
-        
-        if {[dict exists $perm grantedTo user]} {
-            set user [dict get $perm grantedTo user]
-            set user_name [dict get $user displayName]
-            set user_email [dict get $user email]
-        } elseif {[dict exists $perm grantedToIdentities]} {
-            set identities [dict get $perm grantedToIdentities]
-            if {[llength $identities] > 0} {
-                set identity [lindex $identities 0]
-                if {[dict exists $identity user]} {
-                    set user [dict get $identity user]
-                    set user_name [dict get $user displayName]
-                    set user_email [dict get $user email]
-                }
-            }
-        }
+        lassign [extract_user_info $perm] user_name user_email
         
         # Truncate long names/emails for table format
         if {[string length $user_name] > 24} {
@@ -614,8 +668,7 @@ proc analyze_permissions {permissions} {
     
     foreach perm $permissions {
         # Skip owner permissions (identified by "owner" role)
-        set roles [dict get $perm roles]
-        if {[lsearch $roles "owner"] >= 0} {
+        if {[is_owner_permission $perm]} {
             continue
         }
         
@@ -629,13 +682,9 @@ proc analyze_permissions {permissions} {
         
         # Check if this is a direct permission
         if {[dict exists $perm grantedTo user]} {
-            set user [dict get $perm grantedTo user]
             set has_direct_sharing 1
-            set email [dict get $user email]
-            if {$email eq ""} {
-                set email [dict get $user displayName]
-            }
-            if {$email ne "" && [lsearch $shared_users $email] < 0} {
+            lassign [extract_user_info $perm] user_name email
+            if {$email ne "N/A" && [lsearch $shared_users $email] < 0} {
                 lappend shared_users $email
             }
         }
@@ -713,6 +762,126 @@ proc get_item_path {item_id access_token} {
     }
 }
 
+proc get_folder_permissions {folder_id access_token} {
+    # Get permissions for a folder
+    # Returns list of {status permissions} where status is "ok" or "error"
+    set permissions_url [build_graph_api_url "/me/drive/items/$folder_id/permissions"]
+    set headers [list Authorization "Bearer $access_token"]
+    set result [make_http_request $permissions_url $headers]
+    set status [lindex $result 0]
+    set data [lindex $result 1]
+    
+    if {$status eq "200"} {
+        set permissions_data [json::json2dict $data]
+        set permissions [dict get $permissions_data value]
+        return [list "ok" $permissions]
+    } else {
+        return [list "error" {}]
+    }
+}
+
+proc has_explicit_user_permission {permissions target_user_lower} {
+    # Check if any permission explicitly grants access to the target user
+    # (non-inherited, non-owner)
+    foreach perm $permissions {
+        # Skip owner permissions
+        if {[is_owner_permission $perm]} {
+            continue
+        }
+        
+        # Check if this permission is inherited
+        if {[is_inherited_permission $perm]} {
+            continue
+        }
+        
+        # Check direct user permissions
+        if {[dict exists $perm grantedTo user]} {
+            set user [dict get $perm grantedTo user]
+            set user_email [string tolower [dict get $user email]]
+            if {[string first $target_user_lower $user_email] >= 0} {
+                return 1
+            }
+        }
+        
+        # Check grantedToIdentities (OneDrive Business)
+        if {[dict exists $perm grantedToIdentities]} {
+            set identities [dict get $perm grantedToIdentities]
+            foreach identity $identities {
+                if {[dict exists $identity user]} {
+                    set user [dict get $identity user]
+                    set user_email [string tolower [dict get $user email]]
+                    if {[string first $target_user_lower $user_email] >= 0} {
+                        return 1
+                    }
+                }
+            }
+        }
+    }
+    return 0
+}
+
+proc add_shared_folder_result {folder_id folder_path access_token has_link has_direct perm_count shared_users target_user_lower shared_folders_var} {
+    # Add a shared folder to the results list
+    upvar $shared_folders_var shared
+    
+    # Get folder name
+    set folder_info_url [build_graph_api_url "/me/drive/items/$folder_id"]
+    set headers [list Authorization "Bearer $access_token"]
+    set info_result [make_http_request $folder_info_url $headers]
+    set info_status [lindex $info_result 0]
+    set info_data [lindex $info_result 1]
+    set folder_name "Unknown"
+    if {$info_status eq "200"} {
+        set folder_data [json::json2dict $info_data]
+        set folder_name [dict get $folder_data name]
+    }
+    
+    # Determine symbol and sharing type
+    if {$has_link} {
+        set symbol "🔗"
+        set share_type "Link sharing"
+    } else {
+        set symbol "👥"
+        set share_type "Direct permissions"
+    }
+    
+    # Get the folder ID by path to ensure consistency
+    set consistent_folder_id $folder_id
+    if {$folder_path ne ""} {
+        if {[catch {
+            set encoded_path [url_encode $folder_path]
+            set path_url [build_graph_api_url "/me/drive/root:/$encoded_path"]
+            set path_result [make_http_request $path_url $headers]
+            set path_status [lindex $path_result 0]
+            set path_data [lindex $path_result 1]
+            if {$path_status eq "200"} {
+                set path_dict [json::json2dict $path_data]
+                set consistent_folder_id [dict get $path_dict id]
+            }
+        } error]} {
+            # Fall back to original folder_id if path lookup fails
+            set consistent_folder_id $folder_id
+        }
+    }
+    
+    lappend shared [list \
+        path $folder_path \
+        name $folder_name \
+        id $consistent_folder_id \
+        symbol $symbol \
+        share_type $share_type \
+        has_link_sharing $has_link \
+        has_direct_sharing $has_direct \
+        permission_count $perm_count \
+        shared_users $shared_users]
+    
+    if {$target_user_lower ne ""} {
+        puts "   ✅ Found explicit permission: $symbol $folder_path"
+    } else {
+        puts "   ✅ Found shared: $symbol $folder_path"
+    }
+}
+
 proc check_folder_recursive {folder_id access_token target_user_lower max_depth current_depth folder_path checked_folders folders_per_level shared_folders} {
     # Recursively check a folder and all its subfolders for sharing
     upvar $checked_folders checked
@@ -739,16 +908,9 @@ proc check_folder_recursive {folder_id access_token target_user_lower max_depth 
     
     if {[catch {
         # Get permissions for this folder
-        set permissions_url "https://graph.microsoft.com/v1.0/me/drive/items/$folder_id/permissions"
-        set headers [list Authorization "Bearer $access_token"]
-        set result [make_http_request $permissions_url $headers]
-        set status [lindex $result 0]
-        set data [lindex $result 1]
+        lassign [get_folder_permissions $folder_id $access_token] perm_status permissions
         
-        if {$status eq "200"} {
-            set permissions_data [json::json2dict $data]
-            set permissions [dict get $permissions_data value]
-            
+        if {$perm_status eq "ok"} {
             # Analyze permissions
             set analysis [analyze_permissions $permissions]
             set has_link [lindex $analysis 0]
@@ -757,56 +919,16 @@ proc check_folder_recursive {folder_id access_token target_user_lower max_depth 
             set shared_users [lindex $analysis 3]
             
             # Check for explicit user permissions if target_user is specified
-            set has_explicit_user_permission 0
+            set has_explicit_user_perm 0
             if {$target_user_lower ne ""} {
-                foreach perm $permissions {
-                    # Skip owner permissions
-                    set roles [dict get $perm roles]
-                    if {[lsearch $roles "owner"] >= 0} {
-                        continue
-                    }
-                    
-                    # Check if this permission is inherited (has inheritedFrom property)
-                    if {[dict exists $perm inheritedFrom]} {
-                        continue
-                    }
-                    
-                    # Check direct user permissions
-                    if {[dict exists $perm grantedTo user]} {
-                        set user [dict get $perm grantedTo user]
-                        set user_email [string tolower [dict get $user email]]
-                        if {[string first $target_user_lower $user_email] >= 0} {
-                            set has_explicit_user_permission 1
-                            break
-                        }
-                    }
-                    
-                    # Check grantedToIdentities (OneDrive Business)
-                    if {[dict exists $perm grantedToIdentities]} {
-                        set identities [dict get $perm grantedToIdentities]
-                        foreach identity $identities {
-                            if {[dict exists $identity user]} {
-                                set user [dict get $identity user]
-                                set user_email [string tolower [dict get $user email]]
-                                if {[string first $target_user_lower $user_email] >= 0} {
-                                    set has_explicit_user_permission 1
-                                    break
-                                }
-                            }
-                        }
-                    }
-                    
-                    if {$has_explicit_user_permission} {
-                        break
-                    }
-                }
+                set has_explicit_user_perm [has_explicit_user_permission $permissions $target_user_lower]
             }
             
             # Determine if this folder should be included in results
             set should_include_folder 0
             if {$target_user_lower ne ""} {
                 # When filtering by user, only include if explicit permission found
-                set should_include_folder $has_explicit_user_permission
+                set should_include_folder $has_explicit_user_perm
             } else {
                 # When not filtering by user, include all shared folders
                 set should_include_folder [expr {$has_link || $has_direct}]
@@ -818,71 +940,19 @@ proc check_folder_recursive {folder_id access_token target_user_lower max_depth 
                     set folder_path [get_item_path $folder_id $access_token]
                 }
                 
-                # Get folder name
-                set folder_info_url "https://graph.microsoft.com/v1.0/me/drive/items/$folder_id"
-                set info_result [make_http_request $folder_info_url $headers]
-                set info_status [lindex $info_result 0]
-                set info_data [lindex $info_result 1]
-                set folder_name "Unknown"
-                if {$info_status eq "200"} {
-                    set folder_data [json::json2dict $info_data]
-                    set folder_name [dict get $folder_data name]
-                }
-                
-                # Determine symbol and sharing type
-                if {$has_link} {
-                    set symbol "🔗"
-                    set share_type "Link sharing"
-                } else {
-                    set symbol "👥"
-                    set share_type "Direct permissions"
-                }
-                
-                # Get the folder ID by path to ensure consistency
-                set consistent_folder_id $folder_id
-                if {$folder_path ne ""} {
-                    if {[catch {
-                        set path_url "https://graph.microsoft.com/v1.0/me/drive/root:/$folder_path"
-                        set path_result [make_http_request $path_url $headers]
-                        set path_status [lindex $path_result 0]
-                        set path_data [lindex $path_result 1]
-                        if {$path_status eq "200"} {
-                            set path_dict [json::json2dict $path_data]
-                            set consistent_folder_id [dict get $path_dict id]
-                        }
-                    } error]} {
-                        # Fall back to original folder_id if path lookup fails
-                        set consistent_folder_id $folder_id
-                    }
-                }
-                
-                lappend shared [list \
-                    path $folder_path \
-                    name $folder_name \
-                    id $consistent_folder_id \
-                    symbol $symbol \
-                    share_type $share_type \
-                    has_link_sharing $has_link \
-                    has_direct_sharing $has_direct \
-                    permission_count $perm_count \
-                    shared_users $shared_users]
-                
-                if {$target_user_lower ne "" && $has_explicit_user_permission} {
-                    puts "   ✅ Found explicit permission: $symbol $folder_path"
-                } else {
-                    puts "   ✅ Found shared: $symbol $folder_path"
-                }
+                add_shared_folder_result $folder_id $folder_path $access_token $has_link $has_direct $perm_count $shared_users $target_user_lower shared
             }
             
             # Implement pruning: if explicit user permission found, skip children
-            if {$target_user_lower ne "" && $has_explicit_user_permission} {
+            if {$target_user_lower ne "" && $has_explicit_user_perm} {
                 puts "   🚀 Pruning: Found explicit permission, skipping subfolders (inherited)"
                 return
             }
         }
         
         # Get children of this folder and recursively check them
-        set children_url "https://graph.microsoft.com/v1.0/me/drive/items/$folder_id/children"
+        set headers [list Authorization "Bearer $access_token"]
+        set children_url [build_graph_api_url "/me/drive/items/$folder_id/children"]
         set children_result [make_http_request $children_url $headers]
         set children_status [lindex $children_result 0]
         set children_data [lindex $children_result 1]
@@ -938,8 +1008,8 @@ proc scan_shared_folders_user {user_email remote_name max_depth target_dir} {
     if {[catch {
         if {$target_dir ne ""} {
             # Get the target directory by path - URL encode the path
-            set encoded_dir [string map {" " "%20" "(" "%28" ")" "%29" "✈️" "%E2%9C%88%EF%B8%8F"} $target_dir]
-            set target_url "https://graph.microsoft.com/v1.0/me/drive/root:/$encoded_dir"
+            set encoded_dir [url_encode $target_dir]
+            set target_url [build_graph_api_url "/me/drive/root:/$encoded_dir"]
             set result [make_http_request $target_url $headers]
             set status [lindex $result 0]
             set data [lindex $result 1]
@@ -956,7 +1026,7 @@ proc scan_shared_folders_user {user_email remote_name max_depth target_dir} {
             }
         } else {
             # Start from root
-            set root_url "https://graph.microsoft.com/v1.0/me/drive/root"
+            set root_url [build_graph_api_url "/me/drive/root"]
             set result [make_http_request $root_url $headers]
             set status [lindex $result 0]
             set data [lindex $result 1]
@@ -1079,22 +1149,8 @@ proc fetch_acl {{item_path ""} {remote_name "OneDrive"} {target_dir ""}} {
     }
     
     # Get item info - URL encode the path properly for all Unicode characters
-    # Use a more direct approach that handles Unicode properly
-    set encoded_path ""
-    foreach char [split $full_path ""] {
-        if {$char eq " "} {
-            append encoded_path "%20"
-        } elseif {[string is ascii $char]} {
-            append encoded_path $char
-        } else {
-            # For non-ASCII characters, use proper UTF-8 encoding
-            set utf8_bytes [encoding convertto utf-8 $char]
-            foreach byte [split $utf8_bytes ""] {
-                append encoded_path [format "%%%02X" [scan $byte %c]]
-            }
-        }
-    }
-    set item_url "https://graph.microsoft.com/v1.0/me/drive/root:/$encoded_path"
+    set encoded_path [url_encode $full_path]
+    set item_url [build_graph_api_url "/me/drive/root:/$encoded_path"]
     update_status "Getting item info from: $item_url" blue
     
     set result [make_http_request $item_url [list Authorization "Bearer $access_token"]]
@@ -1123,7 +1179,7 @@ proc fetch_acl {{item_path ""} {remote_name "OneDrive"} {target_dir ""}} {
     update_status "✅ Found $item_type: $item_name (ID: $item_id)" green
     
     # Get permissions
-    set permissions_url "https://graph.microsoft.com/v1.0/me/drive/items/$item_id/permissions"
+    set permissions_url [build_graph_api_url "/me/drive/items/$item_id/permissions"]
     update_status "Getting ACL from: $permissions_url" blue
     
     set result [make_http_request $permissions_url [list Authorization "Bearer $access_token"]]
@@ -1164,24 +1220,7 @@ proc fetch_acl {{item_path ""} {remote_name "OneDrive"} {target_dir ""}} {
             set roles_str [join $roles ", "]
             
             # Get user information
-            set user_name "N/A"
-            set user_email "N/A"
-            
-            if {[dict exists $perm grantedTo user]} {
-                set user [dict get $perm grantedTo user]
-                set user_name [dict get $user displayName]
-                set user_email [dict get $user email]
-            } elseif {[dict exists $perm grantedToIdentities]} {
-                set identities [dict get $perm grantedToIdentities]
-                if {[llength $identities] > 0} {
-                    set identity [lindex $identities 0]
-                    if {[dict exists $identity user]} {
-                        set user [dict get $identity user]
-                        set user_name [dict get $user displayName]
-                        set user_email [dict get $user email]
-                    }
-                }
-            }
+            lassign [extract_user_info $perm] user_name user_email
             
             # Get link information
             set link_type "N/A"
