@@ -34,10 +34,22 @@ if {$gui_mode} {
 
 package require http
 package require json
+package require json::write
 package require tls
 
 # Configure TLS for HTTPS requests
-::http::register https 443 [list ::tls::socket]
+::http::register https 443 [list ::tls::socket -autoservername 1]
+
+# Suppress TLS channel error messages (they're just warnings, not fatal)
+# These get logged but don't affect functionality
+proc bgerror {message} {
+    # Suppress SSL channel errors (non-fatal warnings)
+    if {[string match "*SSL channel*" $message]} {
+        return
+    }
+    # Log other errors
+    debug_log "Background error: $message"
+}
 
 # Global variables
 set debug_mode 1  ;# Set to 1 to enable debug logging
@@ -47,10 +59,23 @@ set remote_name "OneDrive"
 set current_folder_id "root"
 set current_folder_path ""
 set acl_fetch_job ""  ;# Track pending ACL fetch job to allow cancellation
+set token_capability "unknown"  ;# "full", "read-only", or "unknown"
+set current_item_id ""       ;# Track current item for edit operations
+
+# OAuth configuration
+set ::oauth(client_id)     "b15665d9-eda6-4092-8539-0eec376afd59"
+set ::oauth(client_secret) "qtyfaBBYA403=unZUP40~_#"
+set ::oauth(redirect_uri)  "http://localhost:53682/"
+set ::oauth(auth_url)      "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+set ::oauth(token_url)     "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+set ::oauth(scope)         "Files.Read Files.ReadWrite Files.ReadWrite.All Sites.Manage.All offline_access"
+set ::oauth(auth_code)     ""
+set ::serverSock           ""
 
 # GUI widget variables (will be set in GUI mode)
 set remote_entry ""
 set url_entry ""
+set action_buttons_frame ""
 
 # Multi-column browser variables
 set column_list {}        ;# List of column widgets
@@ -61,12 +86,31 @@ set acl_path_label ""     ;# Label showing path of current ACL display
 
 if {$gui_mode} {
     # Declare global widget variables
-    global remote_entry url_entry fetch_button acl_path_label column_list column_data selected_item
+    global remote_entry url_entry fetch_button acl_path_label column_list column_data selected_item action_buttons_frame
     
     # Create main window
     wm title . "OneDrive ACL Lister"
-    wm geometry . "1200x800"
-    wm minsize . 800 600
+
+    # Handle window close during OAuth flow
+    wm protocol . WM_DELETE_WINDOW {
+        global serverSock oauth
+        
+        # Clean up OAuth server if running
+        if {[info exists serverSock] && $serverSock ne ""} {
+            catch {close $serverSock}
+            set serverSock ""
+            debug_log "Closed OAuth server socket due to window close"
+        }
+        
+        # Signal OAuth flow to stop by setting a cancel flag
+        if {[info exists oauth(auth_code)] && $oauth(auth_code) eq ""} {
+            set oauth(auth_code) "CANCELLED"
+            debug_log "OAuth flow cancelled by user (window closed)"
+        }
+        
+        # Exit cleanly
+        destroy .
+    }
 
     # Create main frame
     set main_frame [ttk::frame .main]
@@ -119,7 +163,17 @@ if {$gui_mode} {
     pack $fetch_frame -fill x -pady {5 10}
     
     set fetch_button [ttk::button $fetch_frame.button -text "Fetch ACL" -command on_fetch_button_click -state disabled]
-    pack $fetch_button -anchor center
+    pack $fetch_button -side left -padx 5
+    
+    # Action buttons on the right side
+    set action_buttons_frame [ttk::frame $fetch_frame.actions]
+    pack $action_buttons_frame -side right -padx 5
+    
+    ttk::button $action_buttons_frame.remove -text "Remove Selected" -command on_remove_selected_click -state disabled
+    ttk::button $action_buttons_frame.invite -text "Invite User" -command on_invite_user_click -state disabled
+    
+    pack $action_buttons_frame.remove -side left -padx 2
+    pack $action_buttons_frame.invite -side left -padx 2
 
     # ACL display section (lower half)
     set acl_section [ttk::frame $main_frame.acl]
@@ -146,8 +200,8 @@ if {$gui_mode} {
     set tree_container [ttk::frame $tree_frame.container]
     pack $tree_container -fill both -expand yes
 
-    # Treeview widget
-    set tree [ttk::treeview $tree_container.tree -columns {id roles user email link_type link_scope expires} -show {tree headings}]
+    # Treeview widget (with multi-select enabled)
+    set tree [ttk::treeview $tree_container.tree -columns {id roles user email link_type link_scope expires} -show {tree headings} -selectmode extended -height 10]
     pack $tree -side left -fill both -expand yes
 
     # Scrollbars
@@ -204,6 +258,15 @@ proc debug_log {message} {
     global debug_mode
     if {$debug_mode} {
         puts "DEBUG: $message"
+        
+        # Also write to debug.log file
+        if {[catch {
+            set fh [open "debug.log" a]
+            puts $fh "DEBUG: $message"
+            close $fh
+        }]} {
+            # Silently ignore file write errors
+        }
     }
 }
 
@@ -577,33 +640,528 @@ proc get_access_token {rclone_remote} {
     }
     
     # Parse JSON token
-    if {[catch {json::json2dict $token_json} token_dict]} {
+    set access_token ""
+    if {[catch {json::json2dict $token_json} token_dict] == 0} {
+        set access_token [dict get $token_dict access_token]
+        if {$access_token eq ""} {
+            update_status "Error: No access_token in token JSON" red
+        }
+    } else {
         update_status "Error: Could not parse token JSON: $token_dict" red
-        return ""
-    }
-    
-    set access_token [dict get $token_dict access_token]
-    if {$access_token eq ""} {
-        update_status "Error: No access_token in token JSON" red
-        return ""
     }
     
     return $access_token
 }
 
-proc make_http_request {url headers} {
-    set token [dict get $headers Authorization]
+# ============================================================================
+# Token Management with Capability Detection
+# ============================================================================
+
+proc check_token_capability {token_data} {
+    # Check if token has ACL editing permissions based on scope
+    # Returns: "full", "read-only", or "unknown"
     
-    puts "DEBUG: HTTP Request to: $url"
+    if {![dict exists $token_data scope]} {
+        return "unknown"
+    }
+    
+    set scope [dict get $token_data scope]
+    
+    # Check for required scopes for ACL editing
+    # For OneDrive Personal: Files.ReadWrite.All is sufficient
+    # For OneDrive Business: Sites.Manage.All may also be needed
+    set has_write [expr {[string first "Files.ReadWrite.All" $scope] >= 0 || [string first "Files.ReadWrite" $scope] >= 0}]
+    set has_manage [expr {[string first "Sites.Manage.All" $scope] >= 0}]
+    
+    # If we have Files.ReadWrite.All, that's sufficient for ACL editing on OneDrive Personal
+    # Sites.Manage.All is nice to have but Microsoft often doesn't grant it to personal accounts
+    if {$has_write} {
+        return "full"
+    }
+    
+    if {[string first "Files.Read" $scope] >= 0} {
+        return "read-only"
+    }
+    
+    return "unknown"
+}
+
+proc get_access_token_with_capability {rclone_remote} {
+    # Get access token and determine capability level
+    # Returns: {access_token capability_level}
+    # capability_level: "full", "read-only", or "unknown"
+    
+    # Try local token.json first
+    set token_file "./token.json"
+    if {[file exists $token_file]} {
+        set parse_error ""
+        set token_data {}
+        
+        # Try to read and parse token.json
+        if {[catch {
+            set fh [open $token_file r]
+            set token_json [read $fh]
+            close $fh
+            
+            debug_log "Read token.json, length: [string length $token_json]"
+            
+            set token_data [json::json2dict $token_json]
+            
+            debug_log "Successfully parsed JSON, keys: [dict keys $token_data]"
+        } parse_error] == 0} {
+            # Successfully parsed, now check capability and extract token
+            if {[dict exists $token_data access_token]} {
+                set capability [check_token_capability $token_data]
+                set access_token [dict get $token_data access_token]
+                
+                debug_log "Token capability: $capability"
+                debug_log "Using token.json with capability: $capability"
+                
+                return [list $access_token $capability]
+            } else {
+                debug_log "ERROR: No access_token in parsed JSON"
+            }
+        } else {
+            debug_log "Error reading token.json: $parse_error, falling back to rclone.conf"
+        }
+    }
+    
+    # Fallback to rclone.conf (assume read-only)
+    set access_token [get_access_token $rclone_remote]
+    if {$access_token ne ""} {
+        debug_log "Using rclone.conf token (read-only mode)"
+        return [list $access_token "read-only"]
+    }
+    
+    return [list "" "unknown"]
+}
+
+proc save_token_json {token_dict} {
+    # Save OAuth token to token.json with proper format using json::write
+    # Ensures scope is preserved for capability detection
+    
+    debug_log "save_token_json called with dict keys: [dict keys $token_dict]"
+    
+    if {![dict exists $token_dict access_token]} {
+        debug_log "ERROR: No access_token in token response!"
+        debug_log "Token dict contents: $token_dict"
+        return -code error "No access_token in token response"
+    }
+    
+    # Calculate expiry timestamp
+    set now [clock seconds]
+    if {[dict exists $token_dict expires_in]} {
+        set delta [dict get $token_dict expires_in]
+        set exp [expr {$now + $delta}]
+        set expires_at [clock format $exp -gmt 1 -format "%Y-%m-%dT%H:%M:%SZ"]
+    } else {
+        # Default to 1 hour if not specified
+        set exp [expr {$now + 3600}]
+        set expires_at [clock format $exp -gmt 1 -format "%Y-%m-%dT%H:%M:%SZ"]
+    }
+    
+    # Build JSON using json::write for proper quoting
+    # json::write object takes alternating key/value pairs
+    set json_parts [list \
+        access_token [json::write string [dict get $token_dict access_token]] \
+        token_type [json::write string [dict get $token_dict token_type]] \
+        expires_at [json::write string $expires_at]]
+    
+    # Add optional fields
+    if {[dict exists $token_dict scope]} {
+        lappend json_parts scope [json::write string [dict get $token_dict scope]]
+    }
+    if {[dict exists $token_dict expires_in]} {
+        lappend json_parts expires_in [json::write string [dict get $token_dict expires_in]]
+    }
+    if {[dict exists $token_dict refresh_token]} {
+        lappend json_parts refresh_token [json::write string [dict get $token_dict refresh_token]]
+    }
+    
+    # Add drive information
+    lappend json_parts drive_id [json::write string "5D1B2B3BE100F93B"]
+    lappend json_parts drive_type [json::write string "personal"]
+    
+    # Generate JSON object
+    set json_output [json::write object {*}$json_parts]
+    
+    # Write to file with restricted permissions
+    set fh [open "token.json" w 0600]
+    puts $fh $json_output
+    close $fh
+    
+    if {[dict exists $token_dict scope]} {
+        debug_log "Token saved to token.json with scopes: [dict get $token_dict scope]"
+    }
+    return 1
+}
+
+# ============================================================================
+# OAuth Flow Implementation
+# ============================================================================
+
+proc oauth_start_local_server {} {
+    # Start local HTTP server to capture OAuth callback
+    global serverSock
+    
+    # Close any existing server socket first
+    if {$serverSock ne ""} {
+        catch {close $serverSock}
+        set serverSock ""
+    }
     
     if {[catch {
-        set response [http::geturl $url -headers [list Authorization $token] -timeout 30000]
+        set serverSock [socket -server oauth_accept 53682]
+        debug_log "OAuth callback server started on port 53682"
+    } error]} {
+        set errorMsg "Failed to start OAuth server on port 53682: $error"
+        if {[string match "*address already in use*" $error] || [string match "*Address already in use*" $error]} {
+            append errorMsg "\n\nPort 53682 is already in use. Please:"
+            append errorMsg "\n1. Check if another instance of this program is running"
+            append errorMsg "\n2. Wait a moment and try again"
+            append errorMsg "\n3. Or run: lsof -i :53682 (to see what's using the port)"
+        }
+        update_status "Error starting OAuth server: $error" red
+        debug_log $errorMsg
+        return ""
+    }
+    
+    return $serverSock
+}
+
+proc oauth_accept {chan addr port} {
+    # Handle OAuth callback from browser
+    global oauth serverSock
+    
+    debug_log "OAuth callback received from $addr:$port"
+    
+    # Configure channel for HTTP
+    fconfigure $chan -blocking 0 -buffering line -translation {auto crlf}
+    
+    # Set up fileevent to read HTTP request asynchronously
+    fileevent $chan readable [list oauth_handle_request $chan]
+}
+
+proc oauth_handle_request {chan} {
+    # Handle HTTP request from OAuth callback
+    global oauth serverSock
+    
+    set should_return 0
+    if {[catch {
+        # Read the HTTP request line
+        if {[gets $chan line] < 0} {
+            if {[eof $chan]} {
+                close $chan
+            }
+            set should_return 1
+        }
+        
+        debug_log "OAuth callback request: $line"
+        
+        # Extract authorization code from request
+        set code ""
+        if {[regexp {GET\s+/\?code=([^&\s]+)} $line -> code]} {
+            set oauth(auth_code) $code
+            debug_log "Received authorization code: [string range $code 0 20]..."
+            
+            # Read remaining headers (we don't need them but must consume them)
+            while {[gets $chan header] >= 0} {
+                if {$header eq ""} {
+                    break
+                }
+            }
+            
+            # Send success response
+            set body "<html><head><title>Authentication Successful</title></head><body style=\"font-family:Arial,sans-serif;text-align:center;padding:50px;\"><h1 style=\"color:green;\">✓ Authentication Successful</h1><p>You can close this window and return to the application.</p></body></html>"
+            
+            puts $chan "HTTP/1.1 200 OK"
+            puts $chan "Content-Type: text/html; charset=utf-8"
+            puts $chan "Content-Length: [string length $body]"
+            puts $chan "Connection: close"
+            puts $chan ""
+            puts $chan $body
+            flush $chan
+            
+            # Schedule channel close after giving time to send
+            after 100 [list catch [list close $chan]]
+            
+            # Stop listening after successful callback
+            if {$serverSock ne ""} {
+                debug_log "Closing OAuth server socket after successful callback"
+                after 200 [list catch [list close $serverSock]]
+                set serverSock ""
+            }
+        } else {
+            # Read remaining headers
+            while {[gets $chan header] >= 0} {
+                if {$header eq ""} {
+                    break
+                }
+            }
+            
+            # Send error response
+            set body "<html><head><title>Authentication Error</title></head><body style=\"font-family:Arial,sans-serif;text-align:center;padding:50px;\"><h1 style=\"color:red;\">✗ Authentication Error</h1><p>No authorization code received.</p></body></html>"
+            
+            puts $chan "HTTP/1.1 400 Bad Request"
+            puts $chan "Content-Type: text/html; charset=utf-8"
+            puts $chan "Content-Length: [string length $body]"
+            puts $chan "Connection: close"
+            puts $chan ""
+            puts $chan $body
+            flush $chan
+            
+            after 100 [list catch [list close $chan]]
+        }
+    } error]} {
+        debug_log "Error handling OAuth callback: $error"
+        catch {close $chan}
+    }
+    
+    if {$should_return} {
+        return
+    }
+}
+
+proc oauth_build_auth_url {} {
+    # Build Microsoft authorization URL
+    global oauth
+    
+    set query [::http::formatQuery \
+        client_id     $oauth(client_id) \
+        response_type code \
+        redirect_uri  $oauth(redirect_uri) \
+        scope         $oauth(scope) \
+        response_mode query \
+        prompt        select_account]
+    
+    return "$oauth(auth_url)?$query"
+}
+
+proc oauth_exchange_token {code} {
+    # Exchange authorization code for access token
+    global oauth
+    
+    set headers [list Content-Type application/x-www-form-urlencoded]
+    set form [::http::formatQuery \
+        grant_type    authorization_code \
+        code          $code \
+        client_id     $oauth(client_id) \
+        client_secret $oauth(client_secret) \
+        redirect_uri  $oauth(redirect_uri) \
+        scope         $oauth(scope)]
+    
+    debug_log "Exchanging authorization code for access token..."
+    debug_log "Token URL: $oauth(token_url)"
+    
+    # Use a result variable instead of returning from inside catch
+    set result ""
+    set error_msg ""
+    set has_error 0
+    
+    if {[catch {
+        set tok [::http::geturl $oauth(token_url) -method POST -headers $headers -query $form -timeout 30000]
+        set status [::http::status $tok]
+        set ncode [::http::ncode $tok]
+        set data [::http::data $tok]
+        set response_headers [::http::meta $tok]
+        
+        debug_log "Token exchange HTTP status: $status"
+        debug_log "Token exchange HTTP code: $ncode"
+        debug_log "Token exchange response data length: [string length $data]"
+        
+        ::http::cleanup $tok
+        
+        if {$status ne "ok"} {
+            set error_msg "Token exchange failed: HTTP request status is $status"
+            error $error_msg
+        }
+        
+        if {$ncode != 200} {
+            debug_log "Token exchange failed response: $data"
+            set error_msg "Token exchange failed: HTTP $ncode - $data"
+            error $error_msg
+        }
+        
+        # Parse JSON response
+        debug_log "Parsing token JSON response..."
+        set result [json::json2dict $data]
+        debug_log "Token dict keys: [dict keys $result]"
+        
+        # Check if access_token exists
+        if {[dict exists $result access_token]} {
+            debug_log "✓ Token exchange successful, received access_token"
+        } else {
+            debug_log "ERROR: No access_token in parsed response!"
+            set error_msg "No access_token in token response"
+            error $error_msg
+        }
+    } error] != 0} {
+        debug_log "Token exchange error caught: $error"
+        set error_msg "Token exchange error: $error"
+        set has_error 1
+    }
+    
+    # Return the result or error (outside catch)
+    if {$has_error} {
+        return -code error $error_msg
+    }
+    return $result
+}
+
+proc acquire_elevated_token {} {
+    # Orchestrate full OAuth flow
+    global oauth gui_mode
+    
+    update_status "Starting OAuth authentication..." blue
+    
+    # Start local server
+    if {[oauth_start_local_server] eq ""} {
+        return 0
+    }
+    
+    # Build auth URL and open browser
+    set auth_url [oauth_build_auth_url]
+    
+    update_status "Opening browser for authentication..." blue
+    
+    # Open browser (platform-specific)
+    set browser_error 0
+    if {[catch {
+        if {$::tcl_platform(platform) eq "windows"} {
+            exec cmd /c start $auth_url &
+        } elseif {$::tcl_platform(os) eq "Darwin"} {
+            exec open $auth_url &
+        } else {
+            exec xdg-open $auth_url &
+        }
+    } error] != 0} {
+        update_status "Error opening browser: $error" red
+        global serverSock
+        if {$serverSock ne ""} {
+            catch {close $serverSock}
+            set serverSock ""
+        }
+        set browser_error 1
+    }
+    
+    if {$browser_error} {
+        return 0
+    }
+    
+    update_status "Waiting for authentication in browser..." blue
+    
+    # Wait for callback (with timeout)
+    set timeout_ms 120000  ;# 2 minutes
+    set start_time [clock milliseconds]
+    
+    while {$oauth(auth_code) eq ""} {
+        # Check if main window still exists
+        if {![winfo exists .]} {
+            # Window was closed, clean up and exit
+            debug_log "Main window destroyed during OAuth wait"
+            global serverSock
+            if {$serverSock ne ""} {
+                catch {close $serverSock}
+                set serverSock ""
+            }
+            exit 0
+        }
+        
+        # Try to update event loop, handle errors gracefully
+        set update_error 0
+        if {[catch {update} error] != 0} {
+            # Event loop failed, clean up
+            debug_log "Event loop error during OAuth wait: $error"
+            global serverSock
+            if {$serverSock ne ""} {
+                catch {close $serverSock}
+                set serverSock ""
+            }
+            set update_error 1
+        }
+        
+        if {$update_error} {
+            return 0
+        }
+        
+        after 100
+        
+        if {[expr {[clock milliseconds] - $start_time}] > $timeout_ms} {
+            update_status "Authentication timeout - please try again" red
+            global serverSock
+            if {$serverSock ne ""} {
+                catch {close $serverSock}
+                set serverSock ""
+            }
+            return 0
+        }
+    }
+    
+    # Check if authentication was cancelled
+    if {$oauth(auth_code) eq "CANCELLED"} {
+        debug_log "OAuth flow cancelled by user"
+        update_status "Authentication cancelled" orange
+        set oauth(auth_code) ""
+        return 0
+    }
+    
+    update_status "Exchanging authorization code for token..." blue
+    
+    # Exchange code for token
+    set success 0
+    set error_message ""
+    
+    if {[catch {
+        set token_dict [oauth_exchange_token $oauth(auth_code)]
+        save_token_json $token_dict
+        
+        # Reset auth code
+        set oauth(auth_code) ""
+        
+        update_status "✅ Token acquired successfully!" green
+        
+        # Update capability and enable edit mode
+        global token_capability remote_entry
+        debug_log "About to call get_access_token_with_capability..."
+        set result [get_access_token_with_capability [$remote_entry get]]
+        debug_log "get_access_token_with_capability returned: $result"
+        set token_capability [lindex $result 1]
+        debug_log "Token capability set to: $token_capability"
+        
+        update_status "✅ Token acquired and saved successfully!" green
+        
+        set success 1
+    } error_message]} {
+        debug_log "ERROR in acquire_elevated_token catch block: $error_message"
+        update_status "Token exchange failed: $error_message" red
+        set oauth(auth_code) ""
+        set success 0
+    }
+    
+    return $success
+}
+
+proc make_http_request {url headers {method GET} {body ""}} {
+    # Enhanced HTTP request supporting GET, POST, DELETE
+    set token [dict get $headers Authorization]
+    
+    puts "DEBUG: HTTP $method Request to: $url"
+    
+    if {[catch {
+        set opts [list -headers [list Authorization $token] -timeout 30000 -method $method]
+        
+        # Add body for POST requests
+        if {$method eq "POST" && $body ne ""} {
+            lappend opts -query $body
+        }
+        
+        set response [http::geturl $url {*}$opts]
         set status [http::ncode $response]
         set data [http::data $response]
         http::cleanup $response
         
         puts "DEBUG: HTTP Response status: $status"
-        if {$status ne "200"} {
+        if {$status ne "200" && $status ne "201" && $status ne "204"} {
             puts "ERROR: HTTP $status - URL: $url"
             puts "ERROR: Response data: $data"
         }
@@ -615,6 +1173,335 @@ proc make_http_request {url headers} {
         set result [list "error" $error]
     }
     return $result
+}
+
+# ============================================================================
+# Microsoft Graph API Operations for ACL Editing
+# ============================================================================
+
+proc invite_user_to_item {item_id email role access_token} {
+    # Invite a user to an item with specified role
+    # role: "read" or "write"
+    # Returns: {status message}
+    
+    set url "https://graph.microsoft.com/v1.0/me/drive/items/$item_id/invite"
+    set headers [list Authorization "Bearer $access_token" Content-Type "application/json"]
+    
+    # Build request body
+    set body_dict [dict create \
+        requireSignIn true \
+        roles [list $role] \
+        recipients [list [dict create email $email]] \
+        message "You have been granted $role access to this item."]
+    
+    set body_json [json::dict2json $body_dict]
+    
+    set result [make_http_request $url $headers POST $body_json]
+    set status [lindex $result 0]
+    set data [lindex $result 1]
+    
+    if {$status eq "200" || $status eq "201"} {
+        return [list "ok" "Successfully invited $email with $role permission"]
+    } elseif {$status eq "403"} {
+        return [list "error" "Insufficient permissions to invite users"]
+    } elseif {$status eq "404"} {
+        return [list "error" "Item not found"]
+    } else {
+        return [list "error" "Failed to invite user: HTTP $status"]
+    }
+}
+
+proc remove_permission {item_id permission_id access_token} {
+    # Remove a specific permission from an item
+    # Returns: {status message}
+    
+    set url "https://graph.microsoft.com/v1.0/me/drive/items/$item_id/permissions/$permission_id"
+    set headers [list Authorization "Bearer $access_token"]
+    
+    set result [make_http_request $url $headers DELETE]
+    set status [lindex $result 0]
+    
+    if {$status eq "204"} {
+        return [list "ok" "Permission removed successfully"]
+    } elseif {$status eq "403"} {
+        return [list "error" "Insufficient permissions to remove this permission"]
+    } elseif {$status eq "404"} {
+        return [list "error" "Permission not found (may already be removed)"]
+    } elseif {$status eq "401"} {
+        return [list "error" "Token expired or invalid"]
+    } else {
+        return [list "error" "Failed to remove permission: HTTP $status"]
+    }
+}
+
+proc strip_explicit_permissions {item_id access_token} {
+    # Remove all explicit (non-inherited, non-owner) permissions
+    # Returns: {status count_removed message}
+    
+    # Get all permissions
+    set permissions_url "https://graph.microsoft.com/v1.0/me/drive/items/$item_id/permissions"
+    set headers [list Authorization "Bearer $access_token"]
+    set result [make_http_request $permissions_url $headers]
+    set status [lindex $result 0]
+    set data [lindex $result 1]
+    
+    if {$status ne "200"} {
+        return [list "error" 0 "Failed to fetch permissions: HTTP $status"]
+    }
+    
+    set permissions_data [json::json2dict $data]
+    set permissions [dict get $permissions_data value]
+    
+    set removed_count 0
+    set failed_count 0
+    
+    foreach perm $permissions {
+        # Skip owner permissions
+        if {[is_owner_permission $perm]} {
+            continue
+        }
+        
+        # Skip inherited permissions
+        if {[is_inherited_permission $perm]} {
+            continue
+        }
+        
+        # Remove this explicit permission
+        set permission_id [dict get $perm id]
+        set remove_result [remove_permission $item_id $permission_id $access_token]
+        set remove_status [lindex $remove_result 0]
+        
+        if {$remove_status eq "ok"} {
+            incr removed_count
+        } else {
+            incr failed_count
+        }
+    }
+    
+    if {$failed_count > 0} {
+        return [list "warning" $removed_count "Removed $removed_count permission(s), $failed_count failed"]
+    } else {
+        return [list "ok" $removed_count "Removed $removed_count explicit permission(s)"]
+    }
+}
+
+# ============================================================================
+# Edit Mode Button Handlers
+# ============================================================================
+
+proc ensure_edit_capability {} {
+    # Check if we have edit capability, prompt for OAuth if needed
+    # Returns: 1 if we have edit capability, 0 if user cancelled or failed
+    global token_capability remote_entry
+    
+    # Get current token capability
+    set result [get_access_token_with_capability [$remote_entry get]]
+    set access_token [lindex $result 0]
+    set capability [lindex $result 1]
+    set token_capability $capability
+    
+    if {$capability eq "full"} {
+        # Already have edit capability
+        return 1
+    }
+    
+    # Need to acquire elevated token
+    set response [tk_messageBox -type yesno -icon question \
+        -title "Elevated Permissions Required" \
+        -message "This operation requires elevated OneDrive permissions.\n\nWould you like to authenticate in your browser to acquire an editing token?"]
+    
+    if {$response eq "yes"} {
+        # Start OAuth flow
+        if {[acquire_elevated_token]} {
+            return 1
+        } else {
+            return 0
+        }
+    }
+    
+    return 0
+}
+
+proc on_invite_user_click {} {
+    # Show dialog to invite a user
+    global current_item_id remote_entry tree
+    
+    if {$current_item_id eq ""} {
+        tk_messageBox -type ok -icon warning -title "No Item Selected" \
+            -message "Please fetch ACL for an item first."
+        return
+    }
+    
+    # Check if we have edit capability (will prompt for OAuth if needed)
+    if {![ensure_edit_capability]} {
+        return
+    }
+    
+    # Create dialog window
+    set dialog [toplevel .invite_dialog]
+    wm title $dialog "Invite User"
+    wm geometry $dialog "400x200"
+    wm transient $dialog .
+    
+    # Email entry
+    ttk::label $dialog.email_label -text "Email address:"
+    ttk::entry $dialog.email_entry -width 40
+    
+    # Role selection
+    ttk::label $dialog.role_label -text "Permission level:"
+    ttk::frame $dialog.role_frame
+    ttk::radiobutton $dialog.role_frame.read -text "Read (view only)" -variable invite_role -value "read"
+    ttk::radiobutton $dialog.role_frame.write -text "Write (can edit)" -variable invite_role -value "write"
+    set ::invite_role "read"
+    
+    # Buttons
+    ttk::frame $dialog.buttons
+    ttk::button $dialog.buttons.ok -text "Invite" -command {set ::invite_dialog_result ok}
+    ttk::button $dialog.buttons.cancel -text "Cancel" -command {set ::invite_dialog_result cancel}
+    
+    # Layout
+    pack $dialog.email_label -anchor w -padx 10 -pady {10 0}
+    pack $dialog.email_entry -fill x -padx 10 -pady {0 10}
+    pack $dialog.role_label -anchor w -padx 10 -pady {10 0}
+    pack $dialog.role_frame -anchor w -padx 20 -pady {0 10}
+    pack $dialog.role_frame.read -anchor w
+    pack $dialog.role_frame.write -anchor w
+    pack $dialog.buttons -side bottom -pady 10
+    pack $dialog.buttons.ok -side left -padx 5
+    pack $dialog.buttons.cancel -side left -padx 5
+    
+    # Wait for dialog result
+    set ::invite_dialog_result ""
+    focus $dialog.email_entry
+    grab $dialog
+    tkwait variable ::invite_dialog_result
+    
+    if {$::invite_dialog_result eq "ok"} {
+        set email [string trim [$dialog.email_entry get]]
+        set role $::invite_role
+        
+        destroy $dialog
+        
+        if {$email eq ""} {
+            tk_messageBox -type ok -icon warning -title "Invalid Input" \
+                -message "Please enter an email address."
+            return
+        }
+        
+        # Get access token
+        set result [get_access_token_with_capability [$remote_entry get]]
+        set access_token [lindex $result 0]
+        
+        if {$access_token eq ""} {
+            update_status "Error: No access token available" red
+            return
+        }
+        
+        # Invite user
+        update_status "Inviting $email..." blue
+        set invite_result [invite_user_to_item $current_item_id $email $role $access_token]
+        set invite_status [lindex $invite_result 0]
+        set invite_message [lindex $invite_result 1]
+        
+        if {$invite_status eq "ok"} {
+            update_status "✅ $invite_message" green
+            # Refresh ACL display
+            after 1000 {refresh_current_acl}
+        } elseif {$invite_status eq "error" && [string match "*401*" $invite_message]} {
+            update_status "Token expired - please try again" red
+        } else {
+            update_status "❌ $invite_message" red
+        }
+    } else {
+        destroy $dialog
+    }
+}
+
+proc on_remove_selected_click {} {
+    # Remove selected permissions from treeview
+    global tree current_item_id remote_entry
+    
+    if {$current_item_id eq ""} {
+        tk_messageBox -type ok -icon warning -title "No Item Selected" \
+            -message "Please fetch ACL for an item first."
+        return
+    }
+    
+    # Get selected items
+    set selection [$tree selection]
+    
+    if {[llength $selection] == 0} {
+        tk_messageBox -type ok -icon warning -title "No Selection" \
+            -message "Please select one or more permissions to remove."
+        return
+    }
+    
+    # Check if we have edit capability (will prompt for OAuth if needed)
+    if {![ensure_edit_capability]} {
+        return
+    }
+    
+    # Confirm removal
+    set count [llength $selection]
+    set response [tk_messageBox -type yesno -icon warning -title "Confirm Removal" \
+        -message "Remove $count permission(s)?\n\nThis cannot be undone."]
+    
+    if {$response ne "yes"} {
+        return
+    }
+    
+    # Get access token
+    set result [get_access_token_with_capability [$remote_entry get]]
+    set access_token [lindex $result 0]
+    
+    if {$access_token eq ""} {
+        update_status "Error: No access token available" red
+        return
+    }
+    
+    # Remove each selected permission
+    set success_count 0
+    set fail_count 0
+    
+    update_status "Removing $count permission(s)..." blue
+    
+    foreach item $selection {
+        set values [$tree item $item -values]
+        set permission_id [lindex $values 0]
+        
+        set remove_result [remove_permission $current_item_id $permission_id $access_token]
+        set remove_status [lindex $remove_result 0]
+        
+        if {$remove_status eq "ok"} {
+            incr success_count
+        } else {
+            incr fail_count
+            set error_msg [lindex $remove_result 1]
+            if {[string match "*401*" $error_msg]} {
+                update_status "Token expired - please try again" red
+                return
+            }
+        }
+    }
+    
+    if {$fail_count == 0} {
+        update_status "✅ Removed $success_count permission(s)" green
+    } else {
+        update_status "⚠️ Removed $success_count, failed $fail_count" orange
+    }
+    
+    # Refresh ACL display
+    after 1000 {refresh_current_acl}
+}
+
+proc refresh_current_acl {} {
+    # Refresh the current ACL display
+    global selected_item
+    
+    if {[dict exists $selected_item path]} {
+        set item_path [dict get $selected_item path]
+        fetch_acl $item_path
+    }
 }
 
 proc analyze_permissions {permissions} {
@@ -675,6 +1562,7 @@ proc get_item_path {item_id access_token} {
     set headers [list Authorization "Bearer $access_token"]
     set path_parts {}
     set current_id $item_id
+    set result_path "Unknown"
     
     if {[catch {
         while {$current_id ne ""} {
@@ -712,13 +1600,13 @@ proc get_item_path {item_id access_token} {
         }
         
         if {[llength $path_parts] > 0} {
-            return [join $path_parts "/"]
-        } else {
-            return "Unknown"
+            set result_path [join $path_parts "/"]
         }
-    } error]} {
-        return "Unknown"
+    } error] != 0} {
+        # Keep result_path as "Unknown"
     }
+    
+    return $result_path
 }
 
 proc get_folder_permissions {folder_id access_token} {
@@ -1068,7 +1956,7 @@ proc scan_shared_folders_user {user_email remote_name max_depth target_dir} {
 }
 
 proc fetch_acl {{item_path ""} {remote_name "OneDrive"} {target_dir ""}} {
-    global remote_entry tree gui_mode current_folder_path
+    global remote_entry tree gui_mode current_folder_path current_item_id token_capability action_buttons_frame
     
     if {$gui_mode} {
         set remote_name [$remote_entry get]
@@ -1084,13 +1972,19 @@ proc fetch_acl {{item_path ""} {remote_name "OneDrive"} {target_dir ""}} {
     # Clear existing treeview
     clear_treeview
     
-    # Get access token
-    set access_token [get_access_token $remote_name]
+    # Get access token with capability detection
+    set result [get_access_token_with_capability $remote_name]
+    set access_token [lindex $result 0]
+    set capability [lindex $result 1]
+    set token_capability $capability
+    
     if {$access_token eq ""} {
         return
     }
     
-    update_status "✅ Successfully extracted access token from rclone.conf" green
+    debug_log "Token capability: $capability"
+    
+    update_status "✅ Using token (capability: $capability)" green
     
     # Construct the full path if target_dir is specified
     set full_path $item_path
@@ -1126,6 +2020,9 @@ proc fetch_acl {{item_path ""} {remote_name "OneDrive"} {target_dir ""}} {
     set item_name [dict get $item_dict name]
     set item_type [expr {[dict exists $item_dict folder] ? "folder" : "file"}]
     
+    # Store current item ID for edit operations
+    set current_item_id $item_id
+    
     update_status "✅ Found $item_type: $item_name (ID: $item_id)" green
     
     # Get permissions
@@ -1159,14 +2056,35 @@ proc fetch_acl {{item_path ""} {remote_name "OneDrive"} {target_dir ""}} {
         return
     }
     
-    update_status "✅ Found $perm_count permission(s) in ACL" green
+    update_status "✅ Found $perm_count permission(s) in ACL (Token: $capability)" green
     
     if {$gui_mode} {
-        # Populate treeview
+        # Enable action buttons now that we have an item selected
+        $action_buttons_frame.invite configure -state normal
+        $action_buttons_frame.remove configure -state disabled  ;# Will be enabled when user selects items
+        
+        # Bind treeview selection event to enable/disable Remove button
+        bind $tree <<TreeviewSelect>> {
+            global action_buttons_frame tree
+            set selection [$tree selection]
+            if {[llength $selection] > 0} {
+                $action_buttons_frame.remove configure -state normal
+            } else {
+                $action_buttons_frame.remove configure -state disabled
+            }
+        }
+        
+        # Populate treeview (filter out owner permissions)
         set perm_num 1
         foreach perm $permissions {
-            set perm_id [dict get $perm id]
             set roles [dict get $perm roles]
+            
+            # Skip owner permissions - they can't be removed and OneDrive doesn't show them
+            if {[lsearch $roles "owner"] >= 0} {
+                continue
+            }
+            
+            set perm_id [dict get $perm id]
             set roles_str [join $roles ", "]
             
             # Get user information
@@ -1193,9 +2111,7 @@ proc fetch_acl {{item_path ""} {remote_name "OneDrive"} {target_dir ""}} {
             
             # Determine tag based on roles
             set tag "write"
-            if {[lsearch $roles "owner"] >= 0} {
-                set tag "owner"
-            } elseif {[lsearch $roles "read"] >= 0} {
+            if {[lsearch $roles "read"] >= 0} {
                 set tag "read"
             }
             
