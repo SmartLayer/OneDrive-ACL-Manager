@@ -69,44 +69,44 @@ if {$gui_mode} {
     wm minsize . 800 600
 
     # Create main frame
-    set main_frame [frame .main]
+    set main_frame [ttk::frame .main]
     pack $main_frame -fill both -expand yes -padx 10 -pady 10
 
     # Create input frame (top section)
-    set input_frame [frame $main_frame.input]
+    set input_frame [ttk::frame $main_frame.input]
     pack $input_frame -fill x -pady {0 10}
 
     # OneDrive URL address bar (read-only, at top)
-    set url_frame [frame $input_frame.url]
+    set url_frame [ttk::frame $input_frame.url]
     pack $url_frame -fill x -pady 2
-    label $url_frame.label -text "URL:"
+    ttk::label $url_frame.label -text "URL:"
     pack $url_frame.label -side left
-    set url_entry [entry $url_frame.entry -width 60 -relief sunken -bg #f0f0f0 -fg black]
+    set url_entry [ttk::entry $url_frame.entry -width 60]
     pack $url_entry -side left -fill x -expand yes -padx {5 0}
     $url_entry insert 0 "https://onedrive.live.com/?id=root"
     $url_entry configure -state readonly
     
     # Hidden remote name entry (for rclone configuration)
-    set remote_entry [entry $input_frame.remote_hidden -width 20]
+    set remote_entry [ttk::entry $input_frame.remote_hidden -width 20]
     $remote_entry insert 0 "OneDrive"
     # Don't pack this - it's hidden
 
     # Multi-column browser frame
-    set browser_frame [frame $main_frame.browser]
+    set browser_frame [ttk::frame $main_frame.browser]
     pack $browser_frame -fill both -expand yes -pady {0 10}
 
-    label $browser_frame.label -text "Browse OneDrive:"
+    ttk::label $browser_frame.label -text "Browse OneDrive:"
     pack $browser_frame.label -anchor w -pady {0 5}
 
     # Create canvas and scrollbar for horizontal scrolling
-    set browser_canvas [canvas $browser_frame.canvas -height 300]
-    set browser_scroll [scrollbar $browser_frame.scroll -orient horizontal -command "$browser_canvas xview"]
+    set browser_canvas [canvas $browser_frame.canvas -height 300 -highlightthickness 0]
+    set browser_scroll [ttk::scrollbar $browser_frame.scroll -orient horizontal -command "$browser_canvas xview"]
     pack $browser_scroll -side bottom -fill x
     pack $browser_canvas -side top -fill both -expand yes
     $browser_canvas configure -xscrollcommand "$browser_scroll set"
 
     # Create frame inside canvas to hold columns
-    set columns_container [frame $browser_canvas.columns]
+    set columns_container [ttk::frame $browser_canvas.columns]
     $browser_canvas create window 0 0 -anchor nw -window $columns_container
 
     # Bind canvas resize to update scroll region
@@ -115,35 +115,35 @@ if {$gui_mode} {
     }
 
     # Fetch button frame (between browser and ACL display)
-    set fetch_frame [frame $main_frame.fetch]
+    set fetch_frame [ttk::frame $main_frame.fetch]
     pack $fetch_frame -fill x -pady {5 10}
     
-    set fetch_button [button $fetch_frame.button -text "Fetch ACL" -command on_fetch_button_click -state disabled]
+    set fetch_button [ttk::button $fetch_frame.button -text "Fetch ACL" -command on_fetch_button_click -state disabled]
     pack $fetch_button -anchor center
 
     # ACL display section (lower half)
-    set acl_section [frame $main_frame.acl]
+    set acl_section [ttk::frame $main_frame.acl]
     pack $acl_section -fill both -expand yes
 
     # ACL path label (shows which item's ACL is displayed)
-    set acl_path_frame [frame $acl_section.path]
+    set acl_path_frame [ttk::frame $acl_section.path]
     pack $acl_path_frame -fill x -pady {0 5}
-    label $acl_path_frame.label -text "ACL for:"
+    ttk::label $acl_path_frame.label -text "ACL for:"
     pack $acl_path_frame.label -side left
-    set acl_path_label [entry $acl_path_frame.entry -relief sunken -bg #f0f0f0 -fg black]
+    set acl_path_label [ttk::entry $acl_path_frame.entry]
     pack $acl_path_label -side left -fill x -expand yes -padx {5 0}
     $acl_path_label configure -state readonly
 
     # Status label
-    set status_label [label $acl_section.status -text "Ready" -fg blue]
+    set status_label [ttk::label $acl_section.status -text "Ready" -foreground blue]
     pack $status_label -fill x -pady {0 10}
 
     # Create treeview frame
-    set tree_frame [frame $acl_section.tree]
+    set tree_frame [ttk::frame $acl_section.tree]
     pack $tree_frame -fill both -expand yes
 
     # Create treeview with scrollbars
-    set tree_container [frame $tree_frame.container]
+    set tree_container [ttk::frame $tree_frame.container]
     pack $tree_container -fill both -expand yes
 
     # Treeview widget
@@ -151,11 +151,11 @@ if {$gui_mode} {
     pack $tree -side left -fill both -expand yes
 
     # Scrollbars
-    set v_scrollbar [scrollbar $tree_container.vscroll -orient vertical -command "$tree yview"]
+    set v_scrollbar [ttk::scrollbar $tree_container.vscroll -orient vertical -command "$tree yview"]
     pack $v_scrollbar -side right -fill y
     $tree configure -yscrollcommand "$v_scrollbar set"
 
-    set h_scrollbar [scrollbar $tree_frame.hscroll -orient horizontal -command "$tree xview"]
+    set h_scrollbar [ttk::scrollbar $tree_frame.hscroll -orient horizontal -command "$tree xview"]
     pack $h_scrollbar -fill x
     $tree configure -xscrollcommand "$h_scrollbar set"
 
@@ -216,11 +216,11 @@ proc create_column {col_index} {
     global column_list
     
     set container .main.browser.canvas.columns
-    set col_frame [frame $container.col$col_index -relief ridge -borderwidth 1]
+    set col_frame [ttk::frame $container.col$col_index -relief ridge -borderwidth 1]
     pack $col_frame -side left -fill both -expand yes -padx 2
     
     set listbox [listbox $col_frame.list -width 25 -height 15]
-    set scrollbar [scrollbar $col_frame.scroll -orient vertical -command "$listbox yview"]
+    set scrollbar [ttk::scrollbar $col_frame.scroll -orient vertical -command "$listbox yview"]
     pack $scrollbar -side right -fill y
     pack $listbox -side left -fill both -expand yes
     $listbox configure -yscrollcommand "$scrollbar set"
@@ -490,7 +490,7 @@ proc update_status {message {color blue}} {
     # Always log to console for debugging
     puts "STATUS ($color): $message"
     if {$gui_mode} {
-        $status_label configure -text $message -fg $color
+        $status_label configure -text $message -foreground $color
     }
 }
 
@@ -1200,7 +1200,7 @@ proc fetch_acl {{item_path ""} {remote_name "OneDrive"} {target_dir ""}} {
             }
             
             # Insert into treeview
-            $tree insert {} end -text "Permission $perm_num" \
+            $tree insert {} end -text "$perm_num" \
                 -values [list $perm_id $roles_str $user_name $user_email $link_type $link_scope $expires] \
                 -tags $tag
             
