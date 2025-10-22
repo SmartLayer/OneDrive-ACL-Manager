@@ -49,11 +49,12 @@ set current_folder_path ""
 # GUI widget variables (will be set in GUI mode)
 set path_entry ""
 set remote_entry ""
+set url_entry ""
 set folder_listbox ""
 
 if {$gui_mode} {
     # Declare global widget variables
-    global path_entry remote_entry folder_listbox
+    global path_entry remote_entry url_entry folder_listbox
     
     # Create main window
     wm title . "OneDrive ACL Lister"
@@ -68,6 +69,21 @@ if {$gui_mode} {
     set input_frame [frame $main_frame.input]
     pack $input_frame -fill x -pady {0 10}
 
+    # OneDrive URL address bar (read-only, at top)
+    set url_frame [frame $input_frame.url]
+    pack $url_frame -fill x -pady 2
+    label $url_frame.label -text "URL:"
+    pack $url_frame.label -side left
+    set url_entry [entry $url_frame.entry -width 60 -relief sunken -bg #f0f0f0 -fg black]
+    pack $url_entry -side left -fill x -expand yes -padx {5 0}
+    $url_entry insert 0 "https://onedrive.live.com/?id=root"
+    $url_entry configure -state readonly
+    
+    # Hidden remote name entry (for rclone configuration)
+    set remote_entry [entry $input_frame.remote_hidden -width 20]
+    $remote_entry insert 0 "OneDrive"
+    # Don't pack this - it's hidden
+
     # Item path input
     set path_frame [frame $input_frame.path]
     pack $path_frame -fill x -pady 2
@@ -75,15 +91,6 @@ if {$gui_mode} {
     pack $path_frame.label -side left
     set path_entry [entry $path_frame.entry -width 50]
     pack $path_frame.entry -side left -fill x -expand yes -padx {5 0}
-
-    # Remote name input
-    set remote_frame [frame $input_frame.remote]
-    pack $remote_frame -fill x -pady 2
-    label $remote_frame.label -text "Remote Name:"
-    pack $remote_frame.label -side left
-    set remote_entry [entry $remote_frame.entry -width 20]
-    pack $remote_entry -side left -fill x -expand yes -padx {5 0}
-    $remote_entry insert 0 "OneDrive"
 
     # Folder navigation frame
     set folder_frame [frame $main_frame.folder]
@@ -188,7 +195,7 @@ proc clear_treeview {} {
 
 # Navigation functions for folder browsing
 proc load_folder_contents {folder_id folder_path} {
-    global current_folder_id current_folder_path folder_listbox path_entry access_token gui_mode
+    global current_folder_id current_folder_path folder_listbox path_entry url_entry access_token gui_mode
     
     if {!$gui_mode} {
         return
@@ -202,6 +209,12 @@ proc load_folder_contents {folder_id folder_path} {
     # Update path display
     $path_entry delete 0 end
     $path_entry insert 0 $folder_path
+    
+    # Update address bar with OneDrive URL
+    $url_entry configure -state normal
+    $url_entry delete 0 end
+    $url_entry insert 0 "https://onedrive.live.com/?id=$folder_id"
+    $url_entry configure -state readonly
     
     # Clear and populate folder list
     $folder_listbox delete 0 end
@@ -220,7 +233,7 @@ proc load_folder_contents {folder_id folder_path} {
 }
 
 proc fetch_remote_folder_contents {folder_id} {
-    global access_token folder_listbox remote_entry gui_mode
+    global access_token folder_listbox remote_entry current_folder_path gui_mode
     
     if {!$gui_mode} {
         return
@@ -264,6 +277,23 @@ proc fetch_remote_folder_contents {folder_id} {
         # Parse and add folder entries
         set children_dict [json::json2dict $data]
         set children [dict get $children_dict value]
+        
+        # DEBUG: Log children for problematic folder
+        if {[string match "*I.E. Digital Services*" $current_folder_path] || [string match "*safaa0cec*" $folder_id]} {
+            puts "DEBUG: Current folder ID: $folder_id"
+            puts "DEBUG: Current folder path: $current_folder_path"
+            puts "DEBUG: Number of children: [llength $children]"
+            foreach child $children {
+                if {[dict exists $child folder]} {
+                    set child_name [dict get $child name]
+                    set child_id [dict get $child id]
+                    puts "DEBUG: Child folder: name='$child_name' id='$child_id'"
+                    if {[dict exists $child remoteItem]} {
+                        puts "DEBUG:   -> This is a SHORTCUT (remoteItem exists)"
+                    }
+                }
+            }
+        }
         
         foreach child $children {
             if {[dict exists $child folder]} {
@@ -1009,16 +1039,24 @@ proc scan_shared_folders_user {user_email remote_name max_depth target_dir} {
 }
 
 proc fetch_acl {{item_path ""} {remote_name "OneDrive"} {target_dir ""}} {
-    global path_entry remote_entry tree gui_mode
+    global path_entry remote_entry tree gui_mode current_folder_path
     
     if {$gui_mode} {
-        set item_path [$path_entry get]
+        # Only read from entry if item_path wasn't provided as argument
+        if {$item_path eq ""} {
+            set item_path [$path_entry get]
+        }
         set remote_name [$remote_entry get]
     }
     
     if {$item_path eq ""} {
-        update_status "Error: Please enter an item path" red
-        return
+        # Use current folder path if nothing else is provided
+        if {[info exists current_folder_path] && $current_folder_path ne ""} {
+            set item_path $current_folder_path
+        } else {
+            update_status "Error: Please enter an item path" red
+            return
+        }
     }
     
     update_status "Fetching ACL for: $item_path" blue
@@ -1184,7 +1222,7 @@ proc fetch_acl {{item_path ""} {remote_name "OneDrive"} {target_dir ""}} {
         display_acl_cli $permissions $item_id
     }
     
-    update_status "✅ ACL listing of: $item_id" green
+    update_status "✅ ACL listing of: https://onedrive.live.com/?id=$item_id" green
 }
 
 if {$gui_mode} {
@@ -1196,10 +1234,6 @@ if {$gui_mode} {
             # Navigate to the typed path
             navigate_to_typed_path $path
         }
-    }
-    bind $remote_entry <Return> {
-        # Refresh folder list when remote changes
-        load_folder_contents $current_folder_id $current_folder_path
     }
     
     # Bind folder listbox events
