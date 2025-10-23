@@ -545,6 +545,18 @@ proc build_graph_api_url {endpoint} {
     return "https://graph.microsoft.com/v1.0$endpoint"
 }
 
+proc get_item_url_from_path {path} {
+    # Get Microsoft Graph API URL for an item by path
+    # Handles root path and regular paths with proper URL encoding
+    # Returns: Full Graph API URL for the item
+    if {$path eq "/" || $path eq ""} {
+        return [build_graph_api_url "/me/drive/root"]
+    } else {
+        set encoded_path [url_encode $path]
+        return [build_graph_api_url "/me/drive/root:/$encoded_path"]
+    }
+}
+
 # ============================================================================
 # Core Functions
 # ============================================================================
@@ -2455,8 +2467,7 @@ proc add_shared_folder_result {folder_id folder_path access_token has_link has_d
     set consistent_folder_id $folder_id
     if {$folder_path ne ""} {
         if {[catch {
-            set encoded_path [url_encode $folder_path]
-            set path_url [build_graph_api_url "/me/drive/root:/$encoded_path"]
+            set path_url [get_item_url_from_path $folder_path]
             set path_result [make_http_request $path_url $headers]
             set path_status [lindex $path_result 0]
             set path_data [lindex $path_result 1]
@@ -2775,12 +2786,7 @@ proc remove_user_permissions_cli {path user_email max_depth item_type dry_run re
         set folders_per_level(0) 0
         
         # Get starting item ID
-        if {$path eq "/"} {
-            set item_url [build_graph_api_url "/me/drive/root"]
-        } else {
-            set encoded_path [url_encode $path]
-            set item_url [build_graph_api_url "/me/drive/root:/$encoded_path"]
-        }
+        set item_url [get_item_url_from_path $path]
         
         set headers [list Authorization "Bearer $access_token"]
         set result [make_http_request $item_url $headers]
@@ -2883,12 +2889,7 @@ proc remove_user_permissions_cli {path user_email max_depth item_type dry_run re
 
 proc get_item_id_from_path {path access_token} {
     # Helper function to get item ID from path
-    if {$path eq "/"} {
-        set item_url [build_graph_api_url "/me/drive/root"]
-    } else {
-        set encoded_path [url_encode $path]
-        set item_url [build_graph_api_url "/me/drive/root:/$encoded_path"]
-    }
+    set item_url [get_item_url_from_path $path]
     
     set headers [list Authorization "Bearer $access_token"]
     set result [make_http_request $item_url $headers]
@@ -2939,12 +2940,7 @@ proc invite_user_cli {path user_email read_only remote_name} {
     puts "✅ Using token with full permissions"
     
     # Get item ID from path
-    if {$path eq "/"} {
-        set item_url [build_graph_api_url "/me/drive/root"]
-    } else {
-        set encoded_path [url_encode $path]
-        set item_url [build_graph_api_url "/me/drive/root:/$encoded_path"]
-    }
+    set item_url [get_item_url_from_path $path]
     
     set headers [list Authorization "Bearer $access_token"]
     set result [make_http_request $item_url $headers]
@@ -2996,12 +2992,7 @@ proc list_user_access {path user_email max_depth item_type remote_name} {
         puts "✅ Successfully extracted access token from rclone.conf"
         
         # Get item ID from path
-        if {$path eq "/"} {
-            set item_url [build_graph_api_url "/me/drive/root"]
-        } else {
-            set encoded_path [url_encode $path]
-            set item_url [build_graph_api_url "/me/drive/root:/$encoded_path"]
-        }
+        set item_url [get_item_url_from_path $path]
         
         set headers [list Authorization "Bearer $access_token"]
         set result [make_http_request $item_url $headers]
@@ -3085,8 +3076,7 @@ proc scan_shared_folders_user_impl {path user_email max_depth item_type remote_n
     if {[catch {
         if {$path ne "/" && $path ne ""} {
             # Get the target directory by path - URL encode the path
-            set encoded_path [url_encode $path]
-            set target_url [build_graph_api_url "/me/drive/root:/$encoded_path"]
+            set target_url [get_item_url_from_path $path]
             set result [make_http_request $target_url $headers]
             set status [lindex $result 0]
             set data [lindex $result 1]
@@ -3103,7 +3093,7 @@ proc scan_shared_folders_user_impl {path user_email max_depth item_type remote_n
             }
         } else {
             # Start from root
-            set root_url [build_graph_api_url "/me/drive/root"]
+            set root_url [get_item_url_from_path "/"]
             set result [make_http_request $root_url $headers]
             set status [lindex $result 0]
             set data [lindex $result 1]
@@ -3230,8 +3220,7 @@ proc fetch_acl {{item_path ""} {remote_name "OneDrive"} {target_dir ""}} {
     }
     
     # Get item info - URL encode the path properly for all Unicode characters
-    set encoded_path [url_encode $full_path]
-    set item_url [build_graph_api_url "/me/drive/root:/$encoded_path"]
+    set item_url [get_item_url_from_path $full_path]
     update_status "Getting item info from: $item_url" blue
     
     set result [make_http_request $item_url [list Authorization "Bearer $access_token"]]
@@ -3572,12 +3561,7 @@ if {$gui_mode} {
         puts ""
         
         # Get starting item ID
-        if {$path eq "/"} {
-            set item_url [build_graph_api_url "/me/drive/root"]
-        } else {
-            set encoded_path [url_encode $path]
-            set item_url [build_graph_api_url "/me/drive/root:/$encoded_path"]
-        }
+        set item_url [get_item_url_from_path $path]
         
         set headers [list Authorization "Bearer $access_token"]
         set result [make_http_request $item_url $headers]
