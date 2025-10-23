@@ -2499,12 +2499,28 @@ proc add_shared_folder_result {folder_id folder_path access_token has_link has_d
     }
 }
 
-proc collect_folder_permissions_recursive {folder_id access_token max_depth current_depth folder_path parent_id checked_folders folders_per_level all_folders {item_type "folders"}} {
-    # Recursively collect full permission data for all folders
-    # This version stores complete permission information for display
+proc scan_items_recursive {folder_id access_token max_depth current_depth folder_path parent_id checked_folders folders_per_level results {mode "collect_all"} {target_user_lower ""} {item_type "folders"}} {
+    # Unified recursive scanner that handles both collection and filtering modes
+    # 
+    # Parameters:
+    #   folder_id           - ID of folder to scan
+    #   access_token        - Microsoft Graph API access token
+    #   max_depth          - Maximum recursion depth
+    #   current_depth      - Current recursion depth
+    #   folder_path        - Path string for display
+    #   parent_id          - Parent folder ID (used in collect_all mode)
+    #   checked_folders    - Variable name for tracking checked folders
+    #   folders_per_level  - Variable name for tracking folder counts by level
+    #   results            - Variable name for storing results
+    #   mode               - "collect_all" (store all permissions) or "filter" (filter by criteria)
+    #   target_user_lower  - Email of user to filter by (lowercase, for filter mode)
+    #   item_type          - "folders", "files", or "both"
+    #
+    # Returns: Nothing (results stored in upvar variables)
+    
     upvar $checked_folders checked
     upvar $folders_per_level folders
-    upvar $all_folders collected
+    upvar $results collected
     
     if {$current_depth >= $max_depth || [lsearch $checked $folder_id] >= 0} {
         return
@@ -2529,116 +2545,56 @@ proc collect_folder_permissions_recursive {folder_id access_token max_depth curr
         lassign [get_folder_permissions $folder_id $access_token] perm_status permissions
         
         if {$perm_status eq "ok"} {
-            # Store complete folder information
-            set is_root [expr {$current_depth == 0}]
-            lappend collected [list \
-                path $folder_path \
-                id $folder_id \
-                parent_id $parent_id \
-                permissions $permissions \
-                is_root $is_root \
-                depth $current_depth]
-        }
-        
-        # Get children of this folder and recursively check them
-        set headers [list Authorization "Bearer $access_token"]
-        set children_url [build_graph_api_url "/me/drive/items/$folder_id/children"]
-        set children_result [make_http_request $children_url $headers]
-        set children_status [lindex $children_result 0]
-        set children_data [lindex $children_result 1]
-        
-        if {$children_status eq "200"} {
-            set children_dict [json::json2dict $children_data]
-            set children [dict get $children_dict value]
-            
-            foreach child $children {
-                set is_folder [dict exists $child folder]
+            # Process based on mode
+            if {$mode eq "collect_all"} {
+                # Mode 1: Store complete folder information for display
+                set is_root [expr {$current_depth == 0}]
+                lappend collected [list \
+                    path $folder_path \
+                    id $folder_id \
+                    parent_id $parent_id \
+                    permissions $permissions \
+                    is_root $is_root \
+                    depth $current_depth]
+                    
+            } elseif {$mode eq "filter"} {
+                # Mode 2: Filter and analyze permissions
+                set analysis [analyze_permissions $permissions]
+                set has_link [lindex $analysis 0]
+                set has_direct [lindex $analysis 1]
+                set perm_count [lindex $analysis 2]
+                set shared_users [lindex $analysis 3]
                 
-                # Only process folders for now (item_type filter)
-                if {$item_type eq "folders" && $is_folder} {
-                    set child_id [dict get $child id]
-                    set child_name [dict get $child name]
-                    set child_path "$folder_path/$child_name"
+                # Check for explicit user permissions if target_user is specified
+                set has_explicit_user_perm 0
+                if {$target_user_lower ne ""} {
+                    set has_explicit_user_perm [has_explicit_user_permission $permissions $target_user_lower]
+                }
+                
+                # Determine if this folder should be included in results
+                set should_include_folder 0
+                if {$target_user_lower ne ""} {
+                    # When filtering by user, only include if explicit permission found
+                    set should_include_folder $has_explicit_user_perm
+                } else {
+                    # When not filtering by user, include all shared folders
+                    set should_include_folder [expr {$has_link || $has_direct}]
+                }
+                
+                if {$should_include_folder} {
+                    # Get full path if not already provided
                     if {$folder_path eq ""} {
-                        set child_path $child_name
+                        set folder_path [get_item_path $folder_id $access_token]
                     }
                     
-                    # Recursively check this child folder
-                    collect_folder_permissions_recursive $child_id $access_token $max_depth [expr $current_depth + 1] $child_path $folder_id checked folders collected $item_type
-                }
-            }
-        }
-        
-    } error]} {
-        # Skip folders we can't access
-    }
-}
-
-proc check_folder_recursive {folder_id access_token target_user_lower max_depth current_depth folder_path checked_folders folders_per_level shared_folders {item_type "folders"}} {
-    # Recursively check a folder and all its subfolders for sharing
-    upvar $checked_folders checked
-    upvar $folders_per_level folders
-    upvar $shared_folders shared
-    
-    if {$current_depth >= $max_depth || [lsearch $checked $folder_id] >= 0} {
-        return
-    }
-    
-    lappend checked $folder_id
-    
-    # Track folder count per level
-    if {![info exists folders($current_depth)]} {
-        set folders($current_depth) 0
-    }
-    incr folders($current_depth)
-    
-    # Show progress every 10 folders
-    set total_checked [llength $checked]
-    if {$total_checked % 10 == 0} {
-        puts "   📁 Scanned $total_checked folders..."
-    }
-    
-    if {[catch {
-        # Get permissions for this folder
-        lassign [get_folder_permissions $folder_id $access_token] perm_status permissions
-        
-        if {$perm_status eq "ok"} {
-            # Analyze permissions
-            set analysis [analyze_permissions $permissions]
-            set has_link [lindex $analysis 0]
-            set has_direct [lindex $analysis 1]
-            set perm_count [lindex $analysis 2]
-            set shared_users [lindex $analysis 3]
-            
-            # Check for explicit user permissions if target_user is specified
-            set has_explicit_user_perm 0
-            if {$target_user_lower ne ""} {
-                set has_explicit_user_perm [has_explicit_user_permission $permissions $target_user_lower]
-            }
-            
-            # Determine if this folder should be included in results
-            set should_include_folder 0
-            if {$target_user_lower ne ""} {
-                # When filtering by user, only include if explicit permission found
-                set should_include_folder $has_explicit_user_perm
-            } else {
-                # When not filtering by user, include all shared folders
-                set should_include_folder [expr {$has_link || $has_direct}]
-            }
-            
-            if {$should_include_folder} {
-                # Get full path if not already provided
-                if {$folder_path eq ""} {
-                    set folder_path [get_item_path $folder_id $access_token]
+                    add_shared_folder_result $folder_id $folder_path $access_token $has_link $has_direct $perm_count $shared_users $target_user_lower collected
                 }
                 
-                add_shared_folder_result $folder_id $folder_path $access_token $has_link $has_direct $perm_count $shared_users $target_user_lower shared
-            }
-            
-            # Implement pruning: if explicit user permission found, skip children
-            if {$target_user_lower ne "" && $has_explicit_user_perm} {
-                puts "   🚀 Pruning: Found explicit permission, skipping subfolders (inherited)"
-                return
+                # Implement pruning: if explicit user permission found, skip children
+                if {$target_user_lower ne "" && $has_explicit_user_perm} {
+                    puts "   🚀 Pruning: Found explicit permission, skipping subfolders (inherited)"
+                    return
+                }
             }
         }
         
@@ -2676,10 +2632,10 @@ proc check_folder_recursive {folder_id access_token target_user_lower max_depth 
                     }
                     
                     if {$is_folder} {
-                        # Recursively check this child folder
-                        check_folder_recursive $child_id $access_token $target_user_lower $max_depth [expr $current_depth + 1] $child_path checked folders shared $item_type
-                    } elseif {$is_file && ($item_type eq "files" || $item_type eq "both")} {
-                        # For files, check permissions but don't recurse
+                        # Recursively scan this child folder
+                        scan_items_recursive $child_id $access_token $max_depth [expr $current_depth + 1] $child_path $folder_id checked folders collected $mode $target_user_lower $item_type
+                    } elseif {$is_file && $mode eq "filter" && ($item_type eq "files" || $item_type eq "both")} {
+                        # For files in filter mode, check permissions but don't recurse
                         lassign [get_folder_permissions $child_id $access_token] file_perm_status file_permissions
                         
                         if {$file_perm_status eq "ok"} {
@@ -2692,7 +2648,7 @@ proc check_folder_recursive {folder_id access_token target_user_lower max_depth 
                             if {$target_user_lower ne ""} {
                                 set file_has_user [has_explicit_user_permission $file_permissions $target_user_lower]
                                 if {$file_has_user} {
-                                    add_shared_folder_result $child_id $child_path $access_token $file_has_link $file_has_direct $file_perm_count $file_shared_users $target_user_lower shared
+                                    add_shared_folder_result $child_id $child_path $access_token $file_has_link $file_has_direct $file_perm_count $file_shared_users $target_user_lower collected
                                 }
                             }
                         }
@@ -2802,7 +2758,7 @@ proc remove_user_permissions_cli {path user_email max_depth item_type dry_run re
         set start_id [dict get $item_dict id]
         
         # Recursively find items
-        check_folder_recursive $start_id $access_token $target_user_lower $max_depth 0 $path checked_folders folders_per_level shared_folders $item_type
+        scan_items_recursive $start_id $access_token $max_depth 0 $path "" checked_folders folders_per_level shared_folders "filter" $target_user_lower $item_type
         
         puts "✅ Scan complete. Found [llength $shared_folders] items."
         puts ""
@@ -3086,7 +3042,7 @@ proc scan_shared_folders_user_impl {path user_email max_depth item_type remote_n
                 set target_id [dict get $target_data id]
                 
                 puts "📂 Starting recursive search from: $path"
-                check_folder_recursive $target_id $access_token $target_user_lower $max_depth 0 $path checked_folders folders_per_level shared_folders $item_type
+                scan_items_recursive $target_id $access_token $max_depth 0 $path "" checked_folders folders_per_level shared_folders "filter" $target_user_lower $item_type
             } else {
                 puts "⚠️  Path '$path' not found or not accessible"
                 return
@@ -3103,7 +3059,7 @@ proc scan_shared_folders_user_impl {path user_email max_depth item_type remote_n
                 set root_id [dict get $root_data id]
                 
                 puts "📂 Starting recursive search from root..."
-                check_folder_recursive $root_id $access_token $target_user_lower $max_depth 0 "" checked_folders folders_per_level shared_folders $item_type
+                scan_items_recursive $root_id $access_token $max_depth 0 "" "" checked_folders folders_per_level shared_folders "filter" $target_user_lower $item_type
             } else {
                 puts "⚠️  Failed to get root: $status"
                 return
@@ -3592,7 +3548,7 @@ if {$gui_mode} {
         # Set effective max_depth (if 0, scan only root; otherwise use the specified depth)
         set effective_max_depth [expr {$max_depth == 0 ? 1 : $max_depth}]
         
-        collect_folder_permissions_recursive $start_id $access_token $effective_max_depth 0 $path "" checked_folders folders_per_level all_folders $item_type
+        scan_items_recursive $start_id $access_token $effective_max_depth 0 $path "" checked_folders folders_per_level all_folders "collect_all" "" $item_type
         
         if {$max_depth > 0} {
             puts ""
