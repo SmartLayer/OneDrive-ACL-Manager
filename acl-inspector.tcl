@@ -47,12 +47,12 @@ proc bgerror {message} {
     if {[string match "*SSL channel*" $message]} {
         return
     }
-    # Log other errors
+    # Log other errors only if debug mode is on
     debug_log "Background error: $message"
 }
 
 # Global variables
-set debug_mode 1  ;# Set to 1 to enable debug logging
+set debug_mode 0  ;# Set to 1 to enable debug logging
 set access_token ""
 set item_path ""
 set remote_name "OneDrive"
@@ -1355,8 +1355,6 @@ proc make_http_request {url headers {method GET} {body ""}} {
     # Enhanced HTTP request supporting GET, POST, DELETE
     set token [dict get $headers Authorization]
     
-    puts "DEBUG: HTTP $method Request to: $url"
-    
     if {[catch {
         set opts [list -headers [list Authorization $token] -timeout 30000 -method $method]
         
@@ -1370,7 +1368,6 @@ proc make_http_request {url headers {method GET} {body ""}} {
         set data [http::data $response]
         http::cleanup $response
         
-        puts "DEBUG: HTTP Response status: $status"
         if {$status ne "200" && $status ne "201" && $status ne "204"} {
             puts "ERROR: HTTP $status - URL: $url"
             puts "ERROR: Response data: $data"
@@ -1931,7 +1928,7 @@ proc add_shared_folder_result {folder_id folder_path access_token has_link has_d
     }
 }
 
-proc check_folder_recursive {folder_id access_token target_user_lower max_depth current_depth folder_path checked_folders folders_per_level shared_folders} {
+proc check_folder_recursive {folder_id access_token target_user_lower max_depth current_depth folder_path checked_folders folders_per_level shared_folders {item_type "folders"}} {
     # Recursively check a folder and all its subfolders for sharing
     upvar $checked_folders checked
     upvar $folders_per_level folders
@@ -2011,7 +2008,20 @@ proc check_folder_recursive {folder_id access_token target_user_lower max_depth 
             set children [dict get $children_dict value]
             
             foreach child $children {
-                if {[dict exists $child folder]} {
+                set is_folder [dict exists $child folder]
+                set is_file [dict exists $child file]
+                
+                # Determine if we should process this child based on item_type
+                set should_process 0
+                if {$item_type eq "folders" && $is_folder} {
+                    set should_process 1
+                } elseif {$item_type eq "files" && $is_file} {
+                    set should_process 1
+                } elseif {$item_type eq "both"} {
+                    set should_process 1
+                }
+                
+                if {$should_process} {
                     set child_id [dict get $child id]
                     set child_name [dict get $child name]
                     set child_path "$folder_path/$child_name"
@@ -2019,8 +2029,28 @@ proc check_folder_recursive {folder_id access_token target_user_lower max_depth 
                         set child_path $child_name
                     }
                     
-                    # Recursively check this child folder
-                    check_folder_recursive $child_id $access_token $target_user_lower $max_depth [expr $current_depth + 1] $child_path checked folders shared
+                    if {$is_folder} {
+                        # Recursively check this child folder
+                        check_folder_recursive $child_id $access_token $target_user_lower $max_depth [expr $current_depth + 1] $child_path checked folders shared $item_type
+                    } elseif {$is_file && ($item_type eq "files" || $item_type eq "both")} {
+                        # For files, check permissions but don't recurse
+                        lassign [get_folder_permissions $child_id $access_token] file_perm_status file_permissions
+                        
+                        if {$file_perm_status eq "ok"} {
+                            set file_analysis [analyze_permissions $file_permissions]
+                            set file_has_link [lindex $file_analysis 0]
+                            set file_has_direct [lindex $file_analysis 1]
+                            set file_perm_count [lindex $file_analysis 2]
+                            set file_shared_users [lindex $file_analysis 3]
+                            
+                            if {$target_user_lower ne ""} {
+                                set file_has_user [has_explicit_user_permission $file_permissions $target_user_lower]
+                                if {$file_has_user} {
+                                    add_shared_folder_result $child_id $child_path $access_token $file_has_link $file_has_direct $file_perm_count $file_shared_users $target_user_lower shared
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2030,13 +2060,338 @@ proc check_folder_recursive {folder_id access_token target_user_lower max_depth 
     }
 }
 
-proc scan_shared_folders_user {user_email remote_name max_depth target_dir} {
-    # Scan OneDrive for folders explicitly shared with a specific user
-    puts "🔍 Scanning OneDrive for folders shared with user: $user_email"
-    puts "Max depth: $max_depth"
-    if {$target_dir ne ""} {
-        puts "Target directory: $target_dir"
+proc remove_user_permissions_cli {path user_email max_depth item_type dry_run remote_name} {
+    # CLI wrapper for removing user permissions
+    puts "🗑️  Removing user permissions"
+    puts "User: $user_email"
+    puts "Starting path: $path"
+    if {$max_depth > 0} {
+        puts "Max depth: $max_depth"
+        puts "Item type: $item_type"
+    } else {
+        puts "Mode: Non-recursive (single item only)"
     }
+    if {$dry_run} {
+        puts "⚠️  DRY RUN MODE - No changes will be made"
+    }
+    puts ""
+    
+    # Get access token
+    set access_token [get_access_token $remote_name]
+    if {$access_token eq ""} {
+        puts "❌ Failed to get access token"
+        return
+    }
+    
+    puts "✅ Successfully extracted access token from rclone.conf"
+    
+    set target_user_lower [string tolower $user_email]
+    set items_to_remove {}
+    
+    # Collect items with user permissions
+    if {$max_depth == 0} {
+        # Non-recursive: just check this single path
+        set item_id [get_item_id_from_path $path $access_token]
+        if {$item_id eq ""} {
+            puts "❌ Failed to get item ID for path: $path"
+            return
+        }
+        
+        lassign [get_folder_permissions $item_id $access_token] perm_status permissions
+        if {$perm_status eq "ok"} {
+            set has_user_perm [has_explicit_user_permission $permissions $target_user_lower]
+            if {$has_user_perm} {
+                # Find permission ID for this user
+                foreach perm $permissions {
+                    set user_info [extract_user_info $perm]
+                    set perm_user_email [lindex $user_info 1]
+                    if {[string tolower $perm_user_email] eq $target_user_lower} {
+                        set perm_id [dict get $perm id]
+                        lappend items_to_remove [dict create path $path item_id $item_id perm_id $perm_id]
+                    }
+                }
+            }
+        }
+    } else {
+        # Recursive: scan and collect items
+        puts "🔍 Scanning for items with user permissions..."
+        
+        set shared_folders {}
+        set checked_folders {}
+        set folders_per_level(0) 0
+        
+        # Get starting item ID
+        if {$path eq "/"} {
+            set item_url [build_graph_api_url "/me/drive/root"]
+        } else {
+            set encoded_path [url_encode $path]
+            set item_url [build_graph_api_url "/me/drive/root:/$encoded_path"]
+        }
+        
+        set headers [list Authorization "Bearer $access_token"]
+        set result [make_http_request $item_url $headers]
+        set status [lindex $result 0]
+        set data [lindex $result 1]
+        
+        if {$status ne "200"} {
+            puts "❌ Failed to get item: $status"
+            return
+        }
+        
+        set item_dict [json::json2dict $data]
+        set start_id [dict get $item_dict id]
+        
+        # Recursively find items
+        check_folder_recursive $start_id $access_token $target_user_lower $max_depth 0 $path checked_folders folders_per_level shared_folders $item_type
+        
+        puts "✅ Scan complete. Found [llength $shared_folders] items."
+        puts ""
+        
+        # Extract item IDs and permission IDs from shared_folders
+        foreach folder $shared_folders {
+            set folder_id [dict get $folder id]
+            set folder_path [dict get $folder path]
+            
+            # Get permissions to find the specific permission ID for this user
+            lassign [get_folder_permissions $folder_id $access_token] perm_status permissions
+            if {$perm_status eq "ok"} {
+                foreach perm $permissions {
+                    set user_info [extract_user_info $perm]
+                    set perm_user_email [lindex $user_info 1]
+                    if {[string tolower $perm_user_email] eq $target_user_lower} {
+                        set perm_id [dict get $perm id]
+                        lappend items_to_remove [dict create path $folder_path item_id $folder_id perm_id $perm_id]
+                    }
+                }
+            }
+        }
+    }
+    
+    if {[llength $items_to_remove] == 0} {
+        puts "ℹ️  No items found with permissions for $user_email"
+        return
+    }
+    
+    puts "Found [llength $items_to_remove] item(s) with permissions for $user_email:"
+    foreach item $items_to_remove {
+        set item_path [dict get $item path]
+        puts "  - $item_path"
+    }
+    puts ""
+    
+    if {$dry_run} {
+        puts "⚠️  DRY RUN: Would remove [llength $items_to_remove] permission(s)"
+        return
+    }
+    
+    # Confirm before removal
+    puts "⚠️  This will remove $user_email's access from [llength $items_to_remove] item(s)."
+    puts -nonewline "Continue? \[y/N\]: "
+    flush stdout
+    set response [gets stdin]
+    
+    if {$response ne "y" && $response ne "Y"} {
+        puts "❌ Cancelled by user"
+        return
+    }
+    
+    # Perform removals
+    puts ""
+    puts "🗑️  Removing permissions..."
+    set success_count 0
+    set error_count 0
+    
+    foreach item $items_to_remove {
+        set item_path [dict get $item path]
+        set item_id [dict get $item item_id]
+        set perm_id [dict get $item perm_id]
+        
+        set remove_result [remove_permission $item_id $perm_id $access_token]
+        set remove_status [lindex $remove_result 0]
+        
+        if {$remove_status eq "ok"} {
+            puts "  ✅ $item_path"
+            incr success_count
+        } else {
+            set remove_message [lindex $remove_result 1]
+            puts "  ❌ $item_path - $remove_message"
+            incr error_count
+        }
+    }
+    
+    puts ""
+    puts "=== Summary ==="
+    puts "✅ Successfully removed: $success_count"
+    if {$error_count > 0} {
+        puts "❌ Errors: $error_count"
+    }
+}
+
+proc get_item_id_from_path {path access_token} {
+    # Helper function to get item ID from path
+    if {$path eq "/"} {
+        set item_url [build_graph_api_url "/me/drive/root"]
+    } else {
+        set encoded_path [url_encode $path]
+        set item_url [build_graph_api_url "/me/drive/root:/$encoded_path"]
+    }
+    
+    set headers [list Authorization "Bearer $access_token"]
+    set result [make_http_request $item_url $headers]
+    set status [lindex $result 0]
+    set data [lindex $result 1]
+    
+    if {$status eq "200"} {
+        set item_dict [json::json2dict $data]
+        return [dict get $item_dict id]
+    }
+    
+    return ""
+}
+
+proc invite_user_cli {path user_email read_only remote_name} {
+    # CLI wrapper for inviting user to a path
+    puts "📧 Inviting user to path: $path"
+    puts "User: $user_email"
+    puts "Access level: [expr {$read_only ? "read-only" : "read/write"}]"
+    puts ""
+    
+    # Get access token
+    set access_token [get_access_token $remote_name]
+    if {$access_token eq ""} {
+        puts "❌ Failed to get access token"
+        return
+    }
+    
+    puts "✅ Successfully extracted access token from rclone.conf"
+    
+    # Get item ID from path
+    if {$path eq "/"} {
+        set item_url [build_graph_api_url "/me/drive/root"]
+    } else {
+        set encoded_path [url_encode $path]
+        set item_url [build_graph_api_url "/me/drive/root:/$encoded_path"]
+    }
+    
+    set headers [list Authorization "Bearer $access_token"]
+    set result [make_http_request $item_url $headers]
+    set status [lindex $result 0]
+    set data [lindex $result 1]
+    
+    if {$status ne "200"} {
+        puts "❌ Failed to get item: $status"
+        return
+    }
+    
+    set item_dict [json::json2dict $data]
+    set item_id [dict get $item_dict id]
+    set item_name [dict get $item_dict name]
+    
+    puts "📁 Found item: $item_name (ID: $item_id)"
+    
+    # Invite user
+    set role [expr {$read_only ? "read" : "write"}]
+    set invite_result [invite_user_to_item $item_id $user_email $role $access_token]
+    set invite_status [lindex $invite_result 0]
+    set invite_message [lindex $invite_result 1]
+    
+    if {$invite_status eq "ok"} {
+        puts "✅ $invite_message"
+        puts ""
+        puts "ℹ️  Note: This permission is inherited by all children of this folder"
+    } else {
+        puts "❌ $invite_message"
+    }
+}
+
+proc list_user_access {path user_email max_depth item_type remote_name} {
+    # List items where user has access
+    # Supports both recursive (max_depth > 0) and non-recursive (max_depth = 0) modes
+    
+    if {$max_depth == 0} {
+        # Non-recursive mode: just check this path's ACL for user
+        puts "🔍 Checking access for user: $user_email"
+        puts "Path: $path"
+        puts ""
+        
+        # Get access token
+        set access_token [get_access_token $remote_name]
+        if {$access_token eq ""} {
+            return
+        }
+        
+        puts "✅ Successfully extracted access token from rclone.conf"
+        
+        # Get item ID from path
+        if {$path eq "/"} {
+            set item_url [build_graph_api_url "/me/drive/root"]
+        } else {
+            set encoded_path [url_encode $path]
+            set item_url [build_graph_api_url "/me/drive/root:/$encoded_path"]
+        }
+        
+        set headers [list Authorization "Bearer $access_token"]
+        set result [make_http_request $item_url $headers]
+        set status [lindex $result 0]
+        set data [lindex $result 1]
+        
+        if {$status ne "200"} {
+            puts "❌ Failed to get item: $status"
+            return
+        }
+        
+        set item_dict [json::json2dict $data]
+        set item_id [dict get $item_dict id]
+        set item_name [dict get $item_dict name]
+        
+        # Get permissions
+        set permissions_url [build_graph_api_url "/me/drive/items/$item_id/permissions"]
+        set result [make_http_request $permissions_url $headers]
+        set status [lindex $result 0]
+        set data [lindex $result 1]
+        
+        if {$status ne "200"} {
+            puts "❌ Failed to get permissions: $status"
+            return
+        }
+        
+        set permissions_dict [json::json2dict $data]
+        set permissions [dict get $permissions_dict value]
+        
+        # Check for user permission
+        set target_user_lower [string tolower $user_email]
+        set has_permission [has_explicit_user_permission $permissions $target_user_lower]
+        
+        if {$has_permission} {
+            puts "✅ User $user_email has access to: $path"
+            
+            # Show permission details
+            foreach perm $permissions {
+                set user_info [extract_user_info $perm]
+                set perm_user_name [lindex $user_info 0]
+                set perm_user_email [lindex $user_info 1]
+                
+                if {[string tolower $perm_user_email] eq $target_user_lower} {
+                    set roles [dict get $perm roles]
+                    puts "   └─ Roles: [join $roles ", "]"
+                }
+            }
+        } else {
+            puts "ℹ️  User $user_email does not have explicit access to: $path"
+        }
+        
+    } else {
+        # Recursive mode: use existing scan logic
+        scan_shared_folders_user_impl $path $user_email $max_depth $item_type $remote_name
+    }
+}
+
+proc scan_shared_folders_user_impl {path user_email max_depth item_type remote_name} {
+    # Internal implementation of recursive user scan (renamed from scan_shared_folders_user)
+    puts "🔍 Scanning for items with user access: $user_email"
+    puts "Starting path: $path"
+    puts "Max depth: $max_depth"
+    puts "Item type: $item_type"
     puts ""
     
     # Get access token
@@ -2053,12 +2408,12 @@ proc scan_shared_folders_user {user_email remote_name max_depth target_dir} {
     set folders_per_level(0) 0
     set target_user_lower [string tolower $user_email]
     
-    # Start from target directory or root
+    # Start from specified path or root
     if {[catch {
-        if {$target_dir ne ""} {
+        if {$path ne "/" && $path ne ""} {
             # Get the target directory by path - URL encode the path
-            set encoded_dir [url_encode $target_dir]
-            set target_url [build_graph_api_url "/me/drive/root:/$encoded_dir"]
+            set encoded_path [url_encode $path]
+            set target_url [build_graph_api_url "/me/drive/root:/$encoded_path"]
             set result [make_http_request $target_url $headers]
             set status [lindex $result 0]
             set data [lindex $result 1]
@@ -2067,10 +2422,10 @@ proc scan_shared_folders_user {user_email remote_name max_depth target_dir} {
                 set target_data [json::json2dict $data]
                 set target_id [dict get $target_data id]
                 
-                puts "📂 Starting recursive search from directory: $target_dir"
-                check_folder_recursive $target_id $access_token $target_user_lower $max_depth 0 $target_dir checked_folders folders_per_level shared_folders
+                puts "📂 Starting recursive search from: $path"
+                check_folder_recursive $target_id $access_token $target_user_lower $max_depth 0 $path checked_folders folders_per_level shared_folders $item_type
             } else {
-                puts "⚠️  Target directory '$target_dir' not found or not accessible"
+                puts "⚠️  Path '$path' not found or not accessible"
                 return
             }
         } else {
@@ -2085,7 +2440,7 @@ proc scan_shared_folders_user {user_email remote_name max_depth target_dir} {
                 set root_id [dict get $root_data id]
                 
                 puts "📂 Starting recursive search from root..."
-                check_folder_recursive $root_id $access_token $target_user_lower $max_depth 0 "" checked_folders folders_per_level shared_folders
+                check_folder_recursive $root_id $access_token $target_user_lower $max_depth 0 "" checked_folders folders_per_level shared_folders $item_type
             } else {
                 puts "⚠️  Failed to get root: $status"
                 return
@@ -2112,13 +2467,13 @@ proc scan_shared_folders_user {user_email remote_name max_depth target_dir} {
         puts [string repeat "=" 80]
         
         foreach folder $shared_folders {
-            set path [dict get $folder path]
+            set folder_path [dict get $folder path]
             set symbol [dict get $folder symbol]
             set share_type [dict get $folder share_type]
             set perm_count [dict get $folder permission_count]
             set shared_users [dict get $folder shared_users]
             
-            puts "$symbol $path"
+            puts "$symbol $folder_path"
             puts "   └─ $share_type ($perm_count permission(s))"
             
             if {[llength $shared_users] > 0} {
@@ -2154,7 +2509,6 @@ proc scan_shared_folders_user {user_email remote_name max_depth target_dir} {
     }
     
     puts "\n=== Scan Complete ==="
-    puts "💡 Tip: This recursive scan efficiently checks all folders in your OneDrive!"
 }
 
 proc fetch_acl {{item_path ""} {remote_name "OneDrive"} {target_dir ""}} {
@@ -2339,115 +2693,182 @@ if {$gui_mode} {
     # Populate first column with root folder
     populate_column 0 "root" ""
 } else {
-    # CLI mode - process command line arguments
-    if {[info exists argv] && [llength $argv] > 0} {
-        set subcommand [lindex $argv 0]
-        
-        if {$subcommand eq "acl"} {
-            # ACL subcommand: acl [--remote REMOTE] [--dir PATH] <item_path>
-            set remote_name "OneDrive"
-            set target_dir ""
-            set item_path ""
-            set i 1
-            
-            while {$i < [llength $argv]} {
-                set arg [lindex $argv $i]
-                if {$arg eq "--remote" && $i + 1 < [llength $argv]} {
-                    set remote_name [lindex $argv [expr $i + 1]]
-                    incr i 2
-                } elseif {$arg eq "--dir" && $i + 1 < [llength $argv]} {
-                    set target_dir [lindex $argv [expr $i + 1]]
-                    incr i 2
-                } elseif {[string index $arg 0] ne "-"} {
-                    set item_path $arg
-                    incr i
-                } else {
-                    puts "Unknown option: $arg"
-                    puts "Usage: tclsh acl-inspector.tcl acl \[--remote REMOTE\] \[--dir PATH\] <item_path>"
-                    exit 1
-                }
-            }
-            
-            if {$item_path eq ""} {
-                puts "Error: item_path is required"
-                puts "Usage: tclsh acl-inspector.tcl acl \[--remote REMOTE\] \[--dir PATH\] <item_path>"
-                exit 1
-            }
-            
-            puts "OneDrive ACL Lister - ACL Mode"
-        puts "Item Path: $item_path"
-        puts "Remote Name: $remote_name"
-            if {$target_dir ne ""} {
-                puts "Target Directory: $target_dir"
-            }
+    # CLI mode - process command line arguments with path-first interface
+    # Usage: [PATH] [OPTIONS]
+    
+    # Show help function
+    proc show_usage {} {
+        puts "Usage: tclsh acl-inspector.tcl \[PATH\] \[OPTIONS\]"
         puts ""
-        
-        # Fetch ACL
-            fetch_acl $item_path $remote_name $target_dir
-            
-        } elseif {$subcommand eq "user"} {
-            # User subcommand: user [--remote REMOTE] [--dir PATH] [--max-depth N] <user_email>
-            set remote_name "OneDrive"
-            set target_dir ""
-            set max_depth 3
-            set user_email ""
-            set i 1
-            
-            while {$i < [llength $argv]} {
-                set arg [lindex $argv $i]
-                if {$arg eq "--remote" && $i + 1 < [llength $argv]} {
-                    set remote_name [lindex $argv [expr $i + 1]]
-                    incr i 2
-                } elseif {$arg eq "--dir" && $i + 1 < [llength $argv]} {
-                    set target_dir [lindex $argv [expr $i + 1]]
-                    incr i 2
-                } elseif {$arg eq "--max-depth" && $i + 1 < [llength $argv]} {
-                    set max_depth [lindex $argv [expr $i + 1]]
-                    incr i 2
-                } elseif {[string index $arg 0] ne "-"} {
-                    set user_email $arg
-                    incr i
-                } else {
-                    puts "Unknown option: $arg"
-                    puts "Usage: tclsh acl-inspector.tcl user \[--remote REMOTE\] \[--dir PATH\] \[--max-depth N\] <user_email>"
-                    exit 1
-                }
-            }
-            
-            if {$user_email eq ""} {
-                puts "Error: user_email is required"
-                puts "Usage: tclsh acl-inspector.tcl user \[--remote REMOTE\] \[--dir PATH\] \[--max-depth N\] <user_email>"
-                exit 1
-            }
-            
-            puts "OneDrive ACL Lister - User Scan Mode"
-            puts "User Email: $user_email"
-            puts "Remote Name: $remote_name"
-            puts "Max Depth: $max_depth"
-            if {$target_dir ne ""} {
-                puts "Target Directory: $target_dir"
-            }
-            puts ""
-            
-            # Scan for shared folders
-            scan_shared_folders_user $user_email $remote_name $max_depth $target_dir
-            
-        } else {
-            puts "Error: Unknown subcommand '$subcommand'"
-            puts "Usage:"
-            puts "  tclsh acl-inspector.tcl acl \[--remote REMOTE\] \[--dir PATH\] <item_path>"
-            puts "  tclsh acl-inspector.tcl user \[--remote REMOTE\] \[--dir PATH\] \[--max-depth N\] <user_email>"
-            exit 1
-        }
-    } else {
-        puts "Usage:"
-        puts "  tclsh acl-inspector.tcl acl \[--remote REMOTE\] \[--dir PATH\] <item_path>"
-        puts "  tclsh acl-inspector.tcl user \[--remote REMOTE\] \[--dir PATH\] \[--max-depth N\] <user_email>"
+        puts "PATH: Item to inspect (default: /)"
+        puts ""
+        puts "Options:"
+        puts "  --only-user USER       Filter to items USER has access to"
+        puts "  --remove-user USER     Remove USER's access (destructive)"
+        puts "  --invite USER          Invite USER with read/write access (inherited by children)"
+        puts "  -r, --recursive        Include children in scan"
+        puts "  --max-depth N          Max depth (default: 3, requires -r or explicit setting)"
+        puts "  --type TYPE            folders|files|both (default: folders)"
+        puts "  --dry-run              Preview changes (with --remove-user)"
+        puts "  --read-only            Grant read-only access (with --invite, default: read/write)"
+        puts "  --debug                Enable debug output"
+        puts "  --remote REMOTE        OneDrive remote (default: OneDrive)"
         puts ""
         puts "Examples:"
-        puts "  tclsh acl-inspector.tcl acl \"✈️ Tourism Transformation\""
-        puts "  tclsh acl-inspector.tcl user admin@example.com"
-        puts "  tclsh acl-inspector.tcl user --max-depth 5 admin@example.com"
+        puts "  tclsh acl-inspector.tcl \"Work\""
+        puts "  tclsh acl-inspector.tcl \"Work\" --only-user bob@example.com -r"
+        puts "  tclsh acl-inspector.tcl \"Projects\" --invite alice@example.com"
+        puts "  tclsh acl-inspector.tcl \"Projects\" --invite bob@example.com --read-only"
+        puts "  tclsh acl-inspector.tcl \"Projects\" --remove-user ex@example.com -r --dry-run"
+        puts "  tclsh acl-inspector.tcl --only-user bob@example.com -r --type both"
         exit 1
+    }
+    
+    if {![info exists argv] || [llength $argv] == 0} {
+        show_usage
+    }
+    
+    # Initialize variables
+    set path ""
+    set only_user ""
+    set remove_user ""
+    set invite_user ""
+    set max_depth 0
+    set item_type "folders"
+    set dry_run 0
+    set read_only 0
+    set remote_name "OneDrive"
+    set r_flag_used 0
+    set max_depth_explicit 0
+    
+    # Debug mode will be set if --debug flag is provided
+    global debug_mode
+    set debug_mode 0
+    
+    # First pass: extract PATH (first non-flag argument)
+    set i 0
+    while {$i < [llength $argv]} {
+        set arg [lindex $argv $i]
+        if {$arg eq "--help" || $arg eq "-h"} {
+            show_usage
+        } elseif {[string index $arg 0] ne "-" && $path eq ""} {
+            set path $arg
+            break
+        }
+        incr i
+    }
+    
+    # If no path found, default to root
+    if {$path eq ""} {
+        set path "/"
+    }
+    
+    # Second pass: parse all flags
+    set i 0
+    while {$i < [llength $argv]} {
+        set arg [lindex $argv $i]
+        
+        if {$arg eq "--only-user" && $i + 1 < [llength $argv]} {
+            set only_user [lindex $argv [expr $i + 1]]
+            incr i 2
+        } elseif {$arg eq "--remove-user" && $i + 1 < [llength $argv]} {
+            set remove_user [lindex $argv [expr $i + 1]]
+            incr i 2
+        } elseif {$arg eq "--invite" && $i + 1 < [llength $argv]} {
+            set invite_user [lindex $argv [expr $i + 1]]
+            incr i 2
+        } elseif {$arg eq "-r" || $arg eq "--recursive"} {
+            set r_flag_used 1
+            if {!$max_depth_explicit} {
+                set max_depth 3
+            }
+            incr i
+        } elseif {$arg eq "--max-depth" && $i + 1 < [llength $argv]} {
+            set max_depth [lindex $argv [expr $i + 1]]
+            set max_depth_explicit 1
+            incr i 2
+        } elseif {$arg eq "--type" && $i + 1 < [llength $argv]} {
+            set item_type [lindex $argv [expr $i + 1]]
+            incr i 2
+        } elseif {$arg eq "--dry-run"} {
+            set dry_run 1
+            incr i
+        } elseif {$arg eq "--read-only"} {
+            set read_only 1
+            incr i
+        } elseif {$arg eq "--debug"} {
+            set debug_mode 1
+            incr i
+        } elseif {$arg eq "--remote" && $i + 1 < [llength $argv]} {
+            set remote_name [lindex $argv [expr $i + 1]]
+            incr i 2
+        } elseif {[string index $arg 0] ne "-"} {
+            # Skip PATH if already processed
+            incr i
+        } else {
+            puts "Error: Unknown option '$arg'"
+            puts ""
+            show_usage
+        }
+    }
+    
+    # Validation: mutual exclusions
+    set action_count 0
+    if {$only_user ne ""} { incr action_count }
+    if {$remove_user ne ""} { incr action_count }
+    if {$invite_user ne ""} { incr action_count }
+    
+    if {$action_count > 1} {
+        puts "Error: --only-user, --remove-user, and --invite are mutually exclusive"
+        exit 1
+    }
+    
+    # Validate --invite is not used with recursive flags
+    if {$invite_user ne "" && ($r_flag_used || $max_depth_explicit)} {
+        puts "Error: --invite cannot be used with -r or --max-depth (invitations are always inherited)"
+        exit 1
+    }
+    
+    # Validate --dry-run only with --remove-user
+    if {$dry_run && $remove_user eq ""} {
+        puts "Error: --dry-run can only be used with --remove-user"
+        exit 1
+    }
+    
+    # Validate --read-only only with --invite
+    if {$read_only && $invite_user eq ""} {
+        puts "Error: --read-only can only be used with --invite"
+        exit 1
+    }
+    
+    # Validate --type values
+    if {$item_type ne "folders" && $item_type ne "files" && $item_type ne "both"} {
+        puts "Error: --type must be 'folders', 'files', or 'both'"
+        exit 1
+    }
+    
+    # If -r was used without explicit --max-depth, inform user
+    if {$max_depth == 3 && $r_flag_used && !$max_depth_explicit} {
+        puts "ℹ️  Using default max-depth: 3 (use --max-depth N to change)"
+        puts ""
+    }
+    
+    # Execute based on flags
+    if {$invite_user ne ""} {
+        # Invite user to path
+        invite_user_cli $path $invite_user $read_only $remote_name
+    } elseif {$remove_user ne ""} {
+        # Remove user permissions
+        remove_user_permissions_cli $path $remove_user $max_depth $item_type $dry_run $remote_name
+    } elseif {$only_user ne ""} {
+        # List user access
+        list_user_access $path $only_user $max_depth $item_type $remote_name
+    } else {
+        # Default: show ACL
+        puts "OneDrive ACL Inspector"
+        puts "Path: $path"
+        puts "Remote: $remote_name"
+        puts ""
+        fetch_acl $path $remote_name ""
     }
 } 
