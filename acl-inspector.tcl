@@ -2525,7 +2525,7 @@ proc scan_items_recursive {folder_id access_token max_depth current_depth folder
     upvar $folders_per_level folders
     upvar $results collected
     
-    if {$current_depth >= $max_depth || [lsearch $checked $folder_id] >= 0} {
+    if {$current_depth > $max_depth || [lsearch $checked $folder_id] >= 0} {
         return
     }
     
@@ -3524,10 +3524,8 @@ if {$gui_mode} {
             puts ""
         }
         
-        # Set effective max_depth (if 0, scan only root; otherwise use the specified depth)
-        set effective_max_depth [expr {$max_depth == 0 ? 1 : $max_depth}]
-        
-        scan_items_recursive $start_id $access_token $effective_max_depth 0 $path "" checked_folders folders_per_level all_folders "collect_all" "" $item_type
+        # max_depth is the maximum depth level to scan (0 = root only, 1 = root + direct children, etc.)
+        scan_items_recursive $start_id $access_token $max_depth 0 $path "" checked_folders folders_per_level all_folders "collect_all" "" $item_type
         
         if {$max_depth > 0} {
             puts ""
