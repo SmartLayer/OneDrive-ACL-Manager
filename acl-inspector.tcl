@@ -602,6 +602,358 @@ proc display_acl_cli {permissions item_id} {
     puts ""
 }
 
+# ============================================================================
+# Recursive ACL Display Functions
+# ============================================================================
+
+proc get_user_role_from_permissions {permissions user_email} {
+    # Extract the role for a specific user from a permission list
+    # Returns: "write", "read", or ""
+    set user_email_lower [string tolower $user_email]
+    
+    foreach perm $permissions {
+        # Skip owner permissions
+        if {[is_owner_permission $perm]} {
+            continue
+        }
+        
+        # Check grantedTo user
+        if {[dict exists $perm grantedTo user]} {
+            set user [dict get $perm grantedTo user]
+            set email [string tolower [dict get $user email]]
+            if {$email eq $user_email_lower} {
+                set roles [dict get $perm roles]
+                if {[lsearch -exact $roles "write"] >= 0} {
+                    return "write"
+                } elseif {[lsearch -exact $roles "read"] >= 0} {
+                    return "read"
+                }
+                return [lindex $roles 0]
+            }
+        }
+        
+        # Check grantedToIdentities (OneDrive Business)
+        if {[dict exists $perm grantedToIdentities]} {
+            set identities [dict get $perm grantedToIdentities]
+            foreach identity $identities {
+                if {[dict exists $identity user]} {
+                    set user [dict get $identity user]
+                    set email [string tolower [dict get $user email]]
+                    if {$email eq $user_email_lower} {
+                        set roles [dict get $perm roles]
+                        if {[lsearch -exact $roles "write"] >= 0} {
+                            return "write"
+                        } elseif {[lsearch -exact $roles "read"] >= 0} {
+                            return "read"
+                        }
+                        return [lindex $roles 0]
+                    }
+                }
+            }
+        }
+    }
+    return ""
+}
+
+proc extract_users_from_permissions {permissions} {
+    # Extract all non-owner users from permissions
+    # Returns: list of {email role} pairs
+    set users_dict {}
+    
+    foreach perm $permissions {
+        # Skip owner permissions
+        if {[is_owner_permission $perm]} {
+            continue
+        }
+        
+        set roles [dict get $perm roles]
+        set role "read"
+        if {[lsearch -exact $roles "write"] >= 0} {
+            set role "write"
+        } elseif {[llength $roles] > 0} {
+            set role [lindex $roles 0]
+        }
+        
+        # Check grantedTo user
+        if {[dict exists $perm grantedTo user]} {
+            set user [dict get $perm grantedTo user]
+            set email [string tolower [dict get $user email]]
+            if {$email ne ""} {
+                dict set users_dict $email $role
+            }
+        }
+        
+        # Check grantedToIdentities (OneDrive Business)
+        if {[dict exists $perm grantedToIdentities]} {
+            set identities [dict get $perm grantedToIdentities]
+            foreach identity $identities {
+                if {[dict exists $identity user]} {
+                    set user [dict get $identity user]
+                    set email [string tolower [dict get $user email]]
+                    if {$email ne ""} {
+                        dict set users_dict $email $role
+                    }
+                }
+            }
+        }
+    }
+    
+    return $users_dict
+}
+
+proc compare_permission_sets {child_users_dict parent_users_dict} {
+    # Compare two permission sets to determine inheritance type
+    # Returns: "inherited", "restricted", "extended", or "different"
+    
+    set child_emails [dict keys $child_users_dict]
+    set parent_emails [dict keys $parent_users_dict]
+    
+    # If both empty, consider it inherited
+    if {[llength $child_emails] == 0 && [llength $parent_emails] == 0} {
+        return "inherited"
+    }
+    
+    # If child is empty but parent has users, it's restricted
+    if {[llength $child_emails] == 0 && [llength $parent_emails] > 0} {
+        return "restricted"
+    }
+    
+    # Count overlaps
+    set only_in_child 0
+    set only_in_parent 0
+    set in_both 0
+    
+    foreach email $child_emails {
+        if {[dict exists $parent_users_dict $email]} {
+            incr in_both
+        } else {
+            incr only_in_child
+        }
+    }
+    
+    foreach email $parent_emails {
+        if {![dict exists $child_users_dict $email]} {
+            incr only_in_parent
+        }
+    }
+    
+    # Determine type based on overlap
+    if {$only_in_child == 0 && $only_in_parent == 0} {
+        # Same users - inherited
+        return "inherited"
+    } elseif {$only_in_child == 0 && $only_in_parent > 0} {
+        # Subset of parent - restricted
+        return "restricted"
+    } elseif {$only_in_child > 0 && $only_in_parent == 0} {
+        # Superset of parent - extended
+        return "extended"
+    } else {
+        # Different sets - different
+        return "different"
+    }
+}
+
+proc build_user_folder_map {all_folders root_users_dict} {
+    # Build a map of users to folders they have access to
+    # Excludes root folder users unless they appear in subfolders with different permissions
+    # Returns: dict with keys=email, values=list of {folder_path role inheritance_type}
+    
+    set user_map {}
+    
+    foreach folder $all_folders {
+        set folder_path [dict get $folder path]
+        set folder_perms [dict get $folder permissions]
+        set parent_id [dict get $folder parent_id]
+        set is_root [dict get $folder is_root]
+        
+        # Skip root folder for this analysis
+        if {$is_root} {
+            continue
+        }
+        
+        set folder_users [extract_users_from_permissions $folder_perms]
+        
+        foreach {email role} $folder_users {
+            # Check if user is in root
+            set in_root [dict exists $root_users_dict $email]
+            
+            if {!$in_root} {
+                # User not in root - add to map
+                if {![dict exists $user_map $email]} {
+                    dict set user_map $email {}
+                }
+                set folder_list [dict get $user_map $email]
+                lappend folder_list [list $folder_path $role "additional"]
+                dict set user_map $email $folder_list
+            }
+        }
+    }
+    
+    return $user_map
+}
+
+proc detect_special_folders {all_folders root_users_dict} {
+    # Detect folders with non-inherited permissions
+    # Returns: list of folder info dicts with inheritance_type
+    
+    set special_folders {}
+    
+    foreach folder $all_folders {
+        set is_root [dict get $folder is_root]
+        
+        # Skip root folder
+        if {$is_root} {
+            continue
+        }
+        
+        set folder_path [dict get $folder path]
+        set folder_perms [dict get $folder permissions]
+        set folder_users [extract_users_from_permissions $folder_perms]
+        
+        # Compare with root permissions
+        set inheritance_type [compare_permission_sets $folder_users $root_users_dict]
+        
+        # Only include if not inherited
+        if {$inheritance_type ne "inherited"} {
+            lappend special_folders [list \
+                path $folder_path \
+                permissions $folder_perms \
+                users_dict $folder_users \
+                inheritance_type $inheritance_type]
+        }
+    }
+    
+    return $special_folders
+}
+
+proc display_recursive_acl {root_path root_permissions all_folders max_depth} {
+    # Display ACL information in a user-centric recursive format
+    # Shows: 1) Root permissions, 2) Additional users in subfolders, 3) Special folders
+    
+    set root_users_dict [extract_users_from_permissions $root_permissions]
+    set root_emails [lsort [dict keys $root_users_dict]]
+    
+    # Count unique users and folders
+    set all_users_dict $root_users_dict
+    set subfolder_count 0
+    foreach folder $all_folders {
+        set is_root [dict get $folder is_root]
+        if {!$is_root} {
+            incr subfolder_count
+            set folder_perms [dict get $folder permissions]
+            set folder_users [extract_users_from_permissions $folder_perms]
+            foreach {email role} $folder_users {
+                if {![dict exists $all_users_dict $email]} {
+                    dict set all_users_dict $email $role
+                }
+            }
+        }
+    }
+    set total_users [dict size $all_users_dict]
+    
+    # Display header
+    if {$max_depth == 0} {
+        puts "\n[string repeat "=" 80]"
+        puts "=== ACL for \"$root_path\" ==="
+        puts "[string repeat "=" 80]\n"
+    } else {
+        puts "\n[string repeat "=" 80]"
+        puts "=== ACL for \"$root_path\" (recursive scan, max depth: $max_depth) ==="
+        puts "[string repeat "=" 80]\n"
+    }
+    
+    # Section 1: Root Folder Permissions
+    puts "📊 Root Folder Permissions:"
+    if {[llength $root_emails] == 0} {
+        puts "   (No non-owner permissions found)\n"
+    } else {
+        foreach email $root_emails {
+            set role [dict get $root_users_dict $email]
+            puts [format "   • %-50s (%s)" $email $role]
+        }
+        puts ""
+    }
+    
+    # Section 2: Additional Users in Subfolders (only if recursive)
+    if {$max_depth > 0} {
+        set user_folder_map [build_user_folder_map $all_folders $root_users_dict]
+        set additional_users [lsort [dict keys $user_folder_map]]
+        
+        if {[llength $additional_users] > 0} {
+            puts "📋 Additional Users in Subfolders:"
+            foreach email $additional_users {
+                puts "   $email"
+                set folder_list [dict get $user_folder_map $email]
+                foreach folder_info $folder_list {
+                    lassign $folder_info folder_path role inheritance
+                    puts [format "      └─ %s (%s)" $folder_path $role]
+                }
+                puts ""
+            }
+        }
+        
+        # Section 3: Special Folders (Non-Inherited Permissions)
+        set special_folders [detect_special_folders $all_folders $root_users_dict]
+        
+        if {[llength $special_folders] > 0} {
+            puts "⚠️  Special Folders (Non-Inherited Permissions):"
+            foreach folder $special_folders {
+                set folder_path [dict get $folder path]
+                set folder_users_dict [dict get $folder users_dict]
+                set inheritance_type [dict get $folder inheritance_type]
+                
+                # Display inheritance type
+                set type_label "CUSTOM"
+                if {$inheritance_type eq "restricted"} {
+                    set type_label "RESTRICTED"
+                } elseif {$inheritance_type eq "extended"} {
+                    set type_label "EXTENDED"
+                } elseif {$inheritance_type eq "different"} {
+                    set type_label "DIFFERENT"
+                }
+                
+                puts "   📁 $folder_path ($type_label)"
+                
+                # List users with access
+                set folder_emails [lsort [dict keys $folder_users_dict]]
+                if {[llength $folder_emails] > 0} {
+                    foreach email $folder_emails {
+                        set role [dict get $folder_users_dict $email]
+                        puts [format "      • %-46s (%s)" $email $role]
+                    }
+                } else {
+                    puts "      (No users with direct permissions)"
+                }
+                
+                # Show who lost access (for restricted folders)
+                if {$inheritance_type eq "restricted"} {
+                    set lost_access {}
+                    foreach {email role} $root_users_dict {
+                        if {![dict exists $folder_users_dict $email]} {
+                            lappend lost_access $email
+                        }
+                    }
+                    if {[llength $lost_access] > 0} {
+                        puts "      ⚠️  Access removed: [join $lost_access ", "]"
+                    }
+                }
+                puts ""
+            }
+        }
+    }
+    
+    # Summary
+    if {$max_depth == 0} {
+        puts "[string repeat "-" 80]"
+        puts "Summary: $total_users user(s) with access"
+        puts "[string repeat "-" 80]\n"
+    } else {
+        puts "[string repeat "-" 80]"
+        puts "Summary: $total_users unique user(s) across 1 root folder + $subfolder_count subfolder(s)"
+        puts "[string repeat "-" 80]\n"
+    }
+}
+
 proc get_access_token {rclone_remote} {
     set conf_path [file join ~ .config rclone rclone.conf]
     
@@ -2136,6 +2488,81 @@ proc add_shared_folder_result {folder_id folder_path access_token has_link has_d
     }
 }
 
+proc collect_folder_permissions_recursive {folder_id access_token max_depth current_depth folder_path parent_id checked_folders folders_per_level all_folders {item_type "folders"}} {
+    # Recursively collect full permission data for all folders
+    # This version stores complete permission information for display
+    upvar $checked_folders checked
+    upvar $folders_per_level folders
+    upvar $all_folders collected
+    
+    if {$current_depth >= $max_depth || [lsearch $checked $folder_id] >= 0} {
+        return
+    }
+    
+    lappend checked $folder_id
+    
+    # Track folder count per level
+    if {![info exists folders($current_depth)]} {
+        set folders($current_depth) 0
+    }
+    incr folders($current_depth)
+    
+    # Show progress every 10 folders
+    set total_checked [llength $checked]
+    if {$total_checked % 10 == 0} {
+        puts "   📁 Scanned $total_checked folders..."
+    }
+    
+    if {[catch {
+        # Get permissions for this folder
+        lassign [get_folder_permissions $folder_id $access_token] perm_status permissions
+        
+        if {$perm_status eq "ok"} {
+            # Store complete folder information
+            set is_root [expr {$current_depth == 0}]
+            lappend collected [list \
+                path $folder_path \
+                id $folder_id \
+                parent_id $parent_id \
+                permissions $permissions \
+                is_root $is_root \
+                depth $current_depth]
+        }
+        
+        # Get children of this folder and recursively check them
+        set headers [list Authorization "Bearer $access_token"]
+        set children_url [build_graph_api_url "/me/drive/items/$folder_id/children"]
+        set children_result [make_http_request $children_url $headers]
+        set children_status [lindex $children_result 0]
+        set children_data [lindex $children_result 1]
+        
+        if {$children_status eq "200"} {
+            set children_dict [json::json2dict $children_data]
+            set children [dict get $children_dict value]
+            
+            foreach child $children {
+                set is_folder [dict exists $child folder]
+                
+                # Only process folders for now (item_type filter)
+                if {$item_type eq "folders" && $is_folder} {
+                    set child_id [dict get $child id]
+                    set child_name [dict get $child name]
+                    set child_path "$folder_path/$child_name"
+                    if {$folder_path eq ""} {
+                        set child_path $child_name
+                    }
+                    
+                    # Recursively check this child folder
+                    collect_folder_permissions_recursive $child_id $access_token $max_depth [expr $current_depth + 1] $child_path $folder_id checked folders collected $item_type
+                }
+            }
+        }
+        
+    } error]} {
+        # Skip folders we can't access
+    }
+}
+
 proc check_folder_recursive {folder_id access_token target_user_lower max_depth current_depth folder_path checked_folders folders_per_level shared_folders {item_type "folders"}} {
     # Recursively check a folder and all its subfolders for sharing
     upvar $checked_folders checked
@@ -3122,11 +3549,81 @@ if {$gui_mode} {
         # List user access
         list_user_access $path $only_user $max_depth $item_type $remote_name
     } else {
-        # Default: show ACL
+        # Default: show ACL with new recursive format
         puts "OneDrive ACL Inspector"
         puts "Path: $path"
         puts "Remote: $remote_name"
+        if {$max_depth > 0} {
+            puts "Max depth: $max_depth"
+        }
         puts ""
-        fetch_acl $path $remote_name ""
+        
+        # Get access token with capability detection and auto-refresh
+        set result [get_access_token_with_capability $remote_name]
+        set access_token [lindex $result 0]
+        set capability [lindex $result 1]
+        
+        if {$access_token eq ""} {
+            puts "❌ Failed to get access token"
+            exit 1
+        }
+        
+        puts "✅ Using token (capability: $capability)"
+        puts ""
+        
+        # Get starting item ID
+        if {$path eq "/"} {
+            set item_url [build_graph_api_url "/me/drive/root"]
+        } else {
+            set encoded_path [url_encode $path]
+            set item_url [build_graph_api_url "/me/drive/root:/$encoded_path"]
+        }
+        
+        set headers [list Authorization "Bearer $access_token"]
+        set result [make_http_request $item_url $headers]
+        set status [lindex $result 0]
+        set data [lindex $result 1]
+        
+        if {$status ne "200"} {
+            puts "❌ Failed to get item: $status"
+            if {$status eq "error"} {
+                puts "Error details: $data"
+            }
+            exit 1
+        }
+        
+        set item_dict [json::json2dict $data]
+        set start_id [dict get $item_dict id]
+        
+        # Collect all folder permissions recursively
+        set all_folders {}
+        set checked_folders {}
+        set folders_per_level(0) 0
+        
+        if {$max_depth > 0} {
+            puts "🔍 Scanning folder hierarchy (max depth: $max_depth)..."
+            puts ""
+        }
+        
+        # Set effective max_depth (if 0, scan only root; otherwise use the specified depth)
+        set effective_max_depth [expr {$max_depth == 0 ? 1 : $max_depth}]
+        
+        collect_folder_permissions_recursive $start_id $access_token $effective_max_depth 0 $path "" checked_folders folders_per_level all_folders $item_type
+        
+        if {$max_depth > 0} {
+            puts ""
+            puts "✅ Scan complete. Scanned [llength $checked_folders] folder(s)."
+        }
+        
+        # Get root permissions
+        if {[llength $all_folders] > 0} {
+            set root_folder [lindex $all_folders 0]
+            set root_permissions [dict get $root_folder permissions]
+            
+            # Display using new recursive format
+            display_recursive_acl $path $root_permissions $all_folders $max_depth
+        } else {
+            puts "❌ No folders found or unable to access permissions"
+        }
     }
 } 

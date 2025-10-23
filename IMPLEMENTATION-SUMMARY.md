@@ -1,8 +1,99 @@
 # ACL Editing Implementation Summary
 
-## Completed: 2025-10-22 (Revised for Modal OAuth Dialog)
+## Latest: 2025-10-23 (Recursive ACL Display)
 
-This document summarizes the successful implementation of ACL editing functionality in the OneDrive ACL Inspector with a task-oriented, modeless interface and improved OAuth authentication flow.
+This document summarizes the successful implementation of ACL editing functionality in the OneDrive ACL Inspector with a task-oriented, modeless interface, improved OAuth authentication flow, and user-centric recursive ACL display.
+
+## Latest Update: Recursive ACL Display (2025-10-23)
+
+### User-Centric Recursive Permission Auditing
+
+**New Procedures**:
+- `extract_users_from_permissions()` - Extracts all non-owner users from a permissions list
+- `get_user_role_from_permissions()` - Gets role for a specific user from permissions
+- `compare_permission_sets()` - Compares child vs parent permissions to detect inheritance type
+- `build_user_folder_map()` - Creates map of additional users (not in root) to their folder access
+- `detect_special_folders()` - Identifies folders with non-inherited permissions
+- `display_recursive_acl()` - Main display function with three-section output format
+- `collect_folder_permissions_recursive()` - Recursively collects full permission data
+
+**Key Features**:
+
+1. **User-Centric Display**: Instead of listing folders with their permissions, the new format organizes by users:
+   - Root folder permissions (users with access to the starting folder)
+   - Additional users in subfolders (users who only appear in specific subfolders)
+   - Special folders with non-inherited permissions
+
+2. **Smart Inheritance Detection**: Automatically identifies folders with:
+   - **EXTENDED**: Folders with additional users beyond the root (explicit grants)
+   - **RESTRICTED**: Folders with fewer users than root (inheritance disabled)
+   - **DIFFERENT**: Folders with completely different permission sets
+   - **Inherited**: Normal folders (not listed separately to reduce noise)
+
+3. **Unified Display Logic**: Non-recursive mode (no `-r` flag) uses the same display format, treating it as a special case with depth 0. This eliminates code duplication.
+
+4. **Automatic Token Refresh**: Default ACL display now uses `get_access_token_with_capability()` for automatic token refresh when expired.
+
+**Command-Line Usage**:
+```bash
+# Recursive scan with depth limit
+./acl-inspector.tcl "Finance" -r --max-depth 2
+
+# Non-recursive (single folder)
+./acl-inspector.tcl "Finance"
+
+# Deep audit
+./acl-inspector.tcl "Projects" -r --max-depth 10
+```
+
+**Output Format**:
+```
+================================================================================
+=== ACL for "Finance" (recursive scan, max depth: 2) ===
+================================================================================
+
+📊 Root Folder Permissions:
+   • alice@example.com                                  (write)
+   • bob@example.com                                    (read)
+   • charlie@example.com                                (write)
+
+📋 Additional Users in Subfolders:
+   dave@example.com
+      └─ Finance/Budget2025 (read)
+      └─ Finance/Reports (write)
+
+   eve@example.com
+      └─ Finance/Confidential (write)
+
+⚠️  Special Folders (Non-Inherited Permissions):
+   📁 Finance/Confidential (RESTRICTED)
+      • alice@example.com                              (write)
+      • eve@example.com                                (write)
+      ⚠️  Access removed: bob@example.com, charlie@example.com
+
+--------------------------------------------------------------------------------
+Summary: 5 unique user(s) across 1 root folder + 3 subfolder(s)
+--------------------------------------------------------------------------------
+```
+
+**Design Benefits**:
+
+1. **Answers "Who has access?" clearly**: The primary use case is auditing access, especially post-termination ("Did we revoke Bob's access everywhere?"). The user-centric format makes this trivial to answer.
+
+2. **Highlights security issues**: Special folders section immediately shows where inheritance is disabled or modified, which are potential security concerns.
+
+3. **Reduces noise**: Inherited folders (the common case) are not listed separately, focusing attention on exceptions.
+
+4. **Scalable**: Works efficiently even with large folder hierarchies by focusing on users rather than folders.
+
+**Technical Implementation**:
+
+- Recursive collection stores complete permission data with parent tracking
+- Permission comparison uses set operations to detect inheritance patterns
+- Display logic handles both recursive (depth > 0) and non-recursive (depth = 0) modes uniformly
+- Automatic token refresh prevents authentication errors during long scans
+
+**Testing**: Tested successfully with real OneDrive folder containing 14 subfolders, 22 unique users, and 8 special folders with extended permissions.
 
 ## Latest Update: Modal OAuth Dialog (2025-10-22)
 
