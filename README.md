@@ -1,13 +1,18 @@
 # OneDrive ACL Manager (TCL Version)
 
-A TCL/Tk-based tool for managing Access Control Lists (ACLs) in OneDrive using the Microsoft Graph API with OAuth tokens from rclone configuration.
+A TCL/Tk-based tool for auditing and managing Access Control Lists (ACLs) across OneDrive folder hierarchies using the Microsoft Graph API with OAuth tokens from rclone configuration.
+
+## Primary Use Case
+
+**Recursive ACL Auditing**: When management asks "Who has access to our Financial folder?", you need to scan not just the top-level folder, but all subfolders. A terminated employee might have been granted access to specific subfolders while lacking access to the parent - a common security oversight. This tool recursively scans entire folder hierarchies to ensure complete visibility of access permissions.
 
 ## Features
 
-- List permissions for OneDrive items
-- Scan for folders and files with ACL permissions across your OneDrive
-- Find items explicitly shared with specific users
-- Remove user permissions (with dry-run mode)
+- **Recursive ACL scanning** - Audit complete folder hierarchies to find all access grants
+- List permissions for OneDrive items at any depth
+- Scan folders and files with smart pruning for inherited permissions
+- Find items explicitly shared with specific users across folder trees
+- Remove user permissions recursively with dry-run mode
 - Invite users to folders with inherited permissions
 - Dual interface: GUI (Tcl/Tk) and command-line
 - Direct API access using rclone OAuth tokens
@@ -45,57 +50,75 @@ wish acl-inspector.tcl [item_path] [remote_name]
 
 ### Command Line Mode
 
-The CLI uses a path-first interface where you specify the target path first, followed by options:
+The CLI uses a path-first interface for auditing access across folder hierarchies:
 
 ```bash
 tclsh acl-inspector.tcl [PATH] [OPTIONS]
 ```
 
-**PATH**: Item to inspect (default: `/` - root)
+**PATH**: Folder or file to inspect (default: `/` - root)
 
-**Options:**
-- `--only-user USER` - Filter to items USER has access to
-- `--remove-user USER` - Remove USER's access (destructive)
-- `--invite USER` - Invite USER with read/write access (inherited by children)
-- `-r, --recursive` - Include children in scan
-- `--max-depth N` - Max recursion depth (default: 3, requires `-r`)
-- `--type TYPE` - Item types: `folders`, `files`, or `both` (default: `folders`)
-- `--dry-run` - Preview changes without making them (with `--remove-user`)
-- `--read-only` - Grant read-only access (with `--invite`, default: read/write)
+**Core Options:**
+- `-r, --recursive` - **Scan folder and all subfolders** (default max-depth: 3) - Use this for complete access audits
+- `--max-depth N` - Control recursion depth (use with `-r`, or set explicitly for any depth)
+- `--type TYPE` - Item types to scan: `folders`, `files`, or `both` (default: `folders`)
+
+**Filtering and Actions:**
+- `--only-user USER` - Show only items USER has access to (works with or without `-r`)
+- `--remove-user USER` - Remove USER's access from found items (destructive, requires `-r` or explicit depth)
+- `--invite USER` - Invite USER with read/write access (inherited by children, cannot use with `-r`)
+
+**Modifiers:**
+- `--dry-run` - Preview changes without executing (with `--remove-user`)
+- `--read-only` - Grant read-only instead of read/write (with `--invite`)
+- `--debug` - Enable debug output
 - `--remote REMOTE` - OneDrive remote name (default: `OneDrive`)
 
 ### Examples
 
 ```bash
-# GUI mode
-wish acl-inspector.tcl "Documents"
+# ==================== RECURSIVE AUDITING (Primary Use Cases) ====================
 
-# List ACL for a specific folder
-tclsh acl-inspector.tcl "Documents/Project"
+# Audit who has access to Financial folder and ALL subfolders
+tclsh acl-inspector.tcl "Finance" -r
 
-# Check if a user has access to a specific folder
-tclsh acl-inspector.tcl "Work" --only-user bob@example.com
+# Deep audit with custom depth (e.g., for complex hierarchies)
+tclsh acl-inspector.tcl "Projects" -r --max-depth 10
 
-# Find all folders a user has access to (recursive, max depth 3)
-tclsh acl-inspector.tcl --only-user admin@example.com -r
+# Audit including both folders AND files
+tclsh acl-inspector.tcl "Confidential" -r --type both
 
-# Find user access in specific directory with custom depth
-tclsh acl-inspector.tcl "Work" --only-user admin@example.com -r --max-depth 5
+# Find everywhere an ex-employee still has access
+tclsh acl-inspector.tcl "Company" --only-user exemployee@example.com -r
 
-# Scan for both files and folders
-tclsh acl-inspector.tcl "Projects" --only-user alice@example.com -r --type both
+# ==================== SINGLE-ITEM OPERATIONS ====================
 
-# Invite user to folder (permissions are inherited by children)
-tclsh acl-inspector.tcl "Projects" --invite alice@example.com
+# Check ACL of one specific folder (no recursion)
+tclsh acl-inspector.tcl "Finance/Budget2025"
 
-# Invite user with read-only access
-tclsh acl-inspector.tcl "Documents" --invite bob@example.com --read-only
+# Check if specific user has access to one folder
+tclsh acl-inspector.tcl "Finance/Budget2025" --only-user bob@example.com
 
-# Remove user access (dry run first)
-tclsh acl-inspector.tcl "Projects" --remove-user contractor@example.com -r --dry-run
+# ==================== REMEDIATION OPERATIONS ====================
 
-# Remove user access for real (will prompt for confirmation)
-tclsh acl-inspector.tcl "Projects" --remove-user contractor@example.com -r
+# Remove ex-employee from entire hierarchy (dry run first!)
+tclsh acl-inspector.tcl "Projects" --remove-user exemployee@example.com -r --dry-run
+
+# Actually remove after reviewing dry-run output
+tclsh acl-inspector.tcl "Projects" --remove-user exemployee@example.com -r
+
+# ==================== GRANTING ACCESS ====================
+
+# Invite user to folder (automatically inherited by subfolders)
+tclsh acl-inspector.tcl "Finance" --invite newaccountant@example.com
+
+# Invite with read-only access
+tclsh acl-inspector.tcl "Reports" --invite auditor@example.com --read-only
+
+# ==================== GUI MODE ====================
+
+# Launch GUI for interactive browsing
+wish acl-inspector.tcl "Finance"
 ```
 
 ## Permission Requirements
@@ -107,27 +130,33 @@ Note: The default rclone OneDrive token typically has read-only access. For writ
 
 ## Key Features
 
+### Recursive ACL Auditing (Primary Function)
+
+The tool is designed for comprehensive access audits across folder hierarchies. Common scenarios:
+
+- **Post-termination audits**: "Did we revoke all of Bob's access?" - Scan recursively to find any remaining grants in subfolders
+- **Compliance reviews**: "Who can access our Financial data?" - Complete visibility including subfolder permissions  
+- **Access consolidation**: "Let's audit the Projects folder before archiving" - Discover all users with any level of access
+
+**Smart scanning with pruning**:
+- Recursive by default when using `-r` (max-depth: 3, adjustable)
+- Non-recursive mode available for single-folder checks (omit `-r`)
+- Automatically skips subfolders when explicit permission is found (inherited access is assumed)
+- Progress tracking shows folders scanned per level
+- Supports both folders and files with `--type both`
+
 ### GUI Interface
 
 - Interactive folder navigation
 - Colour-coded permission display (green: owner, blue: write, yellow: read)
 - Treeview showing permission details (ID, roles, users, links, expiration)
 
-### CLI Scanning Optimization
+### Safety Features
 
-Recursive scanning uses smart pruning for efficiency:
-- Non-recursive by default (max-depth: 0) - checks only the specified path
-- Use `-r` flag to enable recursion (default max-depth: 3)
-- When explicit user permission is found, skips subfolders (inherited permissions)
-- Shows progress tracking and folder counts per level
-- Supports scanning both folders and files with `--type both`
-
-**Safety Features:**
-- `--dry-run` flag shows what would be removed without making changes
-- Confirmation prompt before removing permissions (unless cancelled)
-- Clear output showing affected items before and after operations
-
-**Testing note**: Use `--max-depth 1` or `-r` for quick tests to avoid long scans.
+- `--dry-run` shows exactly what would be changed before execution
+- Confirmation prompts required for all destructive operations
+- Clear output listing all affected items
+- Cannot remove owner permissions (enforced)
 
 ## Troubleshooting
 

@@ -687,10 +687,129 @@ proc check_token_capability {token_data} {
     return "unknown"
 }
 
-proc get_access_token_with_capability {rclone_remote} {
-    # Get access token and determine capability level
-    # Returns: {access_token capability_level}
+proc is_token_expired {token_data} {
+    # Check if token is expired based on expires_at field
+    # Returns: 1 if expired, 0 if valid, -1 if no expires_at field
+    
+    if {![dict exists $token_data expires_at]} {
+        debug_log "No expires_at field in token, cannot determine expiration"
+        return -1
+    }
+    
+    set expires_at [dict get $token_data expires_at]
+    debug_log "Token expires_at: $expires_at"
+    
+    # Parse ISO 8601 timestamp: 2025-10-22T23:53:05Z
+    if {[catch {
+        set exp_time [clock scan $expires_at -format "%Y-%m-%dT%H:%M:%SZ" -gmt 1]
+        set now [clock seconds]
+        
+        debug_log "Current time: [clock format $now -gmt 1 -format "%Y-%m-%dT%H:%M:%SZ"]"
+        debug_log "Token expiry: [clock format $exp_time -gmt 1 -format "%Y-%m-%dT%H:%M:%SZ"]"
+        
+        if {$now >= $exp_time} {
+            debug_log "Token is EXPIRED"
+            set result 1
+        } else {
+            set time_left [expr {$exp_time - $now}]
+            debug_log "Token is valid, expires in $time_left seconds"
+            set result 0
+        }
+    } error]} {
+        debug_log "Error parsing expires_at: $error"
+        return -1
+    }
+    
+    return $result
+}
+
+proc refresh_access_token {token_data} {
+    # Refresh access token using refresh_token
+    # Returns: new token_data dict on success, empty dict on failure
+    
+    global oauth
+    
+    if {![dict exists $token_data refresh_token]} {
+        debug_log "No refresh_token available in token data"
+        return {}
+    }
+    
+    set refresh_token [dict get $token_data refresh_token]
+    debug_log "Attempting to refresh access token..."
+    
+    set headers [list Content-Type application/x-www-form-urlencoded]
+    set form [::http::formatQuery \
+        grant_type    refresh_token \
+        refresh_token $refresh_token \
+        client_id     $oauth(client_id) \
+        client_secret $oauth(client_secret) \
+        scope         $oauth(scope)]
+    
+    # Use result variable pattern (avoid return inside catch)
+    set result {}
+    set error_msg ""
+    set has_error 0
+    
+    if {[catch {
+        set tok [::http::geturl $oauth(token_url) -method POST -headers $headers -query $form -timeout 30000]
+        set status [::http::status $tok]
+        set ncode [::http::ncode $tok]
+        set data [::http::data $tok]
+        
+        debug_log "Token refresh HTTP status: $status"
+        debug_log "Token refresh HTTP code: $ncode"
+        
+        ::http::cleanup $tok
+        
+        if {$status ne "ok"} {
+            set error_msg "Token refresh failed: HTTP request status is $status"
+            error $error_msg
+        }
+        
+        if {$ncode != 200} {
+            debug_log "Token refresh failed response: $data"
+            set error_msg "Token refresh failed: HTTP $ncode - $data"
+            error $error_msg
+        }
+        
+        # Parse JSON response
+        debug_log "Parsing token refresh JSON response..."
+        set new_token_dict [json::json2dict $data]
+        debug_log "New token dict keys: [dict keys $new_token_dict]"
+        
+        # Check if access_token exists
+        if {[dict exists $new_token_dict access_token]} {
+            debug_log "✓ Token refresh successful, received new access_token"
+            
+            # Save the new token to token.json
+            save_token_json $new_token_dict
+            
+            set result $new_token_dict
+        } else {
+            debug_log "ERROR: No access_token in refresh response!"
+            set error_msg "No access_token in token refresh response"
+            error $error_msg
+        }
+    } error] != 0} {
+        debug_log "Token refresh error caught: $error"
+        set error_msg "Token refresh error: $error"
+        set has_error 1
+    }
+    
+    # Return result or empty dict on error (outside catch)
+    if {$has_error} {
+        debug_log "Token refresh failed: $error_msg"
+        return {}
+    }
+    return $result
+}
+
+proc get_access_token_with_capability {rclone_remote {require_capability ""}} {
+    # Get access token and determine capability level with expiration checking
+    # Returns: {access_token capability_level expiration_info}
     # capability_level: "full", "read-only", or "unknown"
+    # expiration_info: ISO timestamp or "unknown" or "expired"
+    # require_capability: if set to "full", only return full tokens (fail if only read-only available)
     
     # Try local token.json first
     set token_file "./token.json"
@@ -710,31 +829,95 @@ proc get_access_token_with_capability {rclone_remote} {
             
             debug_log "Successfully parsed JSON, keys: [dict keys $token_data]"
         } parse_error] == 0} {
-            # Successfully parsed, now check capability and extract token
+            # Successfully parsed, now check expiration
             if {[dict exists $token_data access_token]} {
-                set capability [check_token_capability $token_data]
-                set access_token [dict get $token_data access_token]
+                set expiration_status [is_token_expired $token_data]
                 
-                debug_log "Token capability: $capability"
-                debug_log "Using token.json with capability: $capability"
-                
-                return [list $access_token $capability]
+                if {$expiration_status == 0} {
+                    # Token is valid and not expired
+                    set capability [check_token_capability $token_data]
+                    set access_token [dict get $token_data access_token]
+                    
+                    if {[dict exists $token_data expires_at]} {
+                        set expires_at [dict get $token_data expires_at]
+                    } else {
+                        set expires_at "unknown"
+                    }
+                    
+                    debug_log "Token capability: $capability, expires: $expires_at"
+                    debug_log "Using valid token.json with capability: $capability"
+                    
+                    return [list $access_token $capability $expires_at]
+                    
+                } elseif {$expiration_status == 1} {
+                    # Token is expired - try to refresh
+                    debug_log "Token in token.json is EXPIRED"
+                    
+                    if {[dict exists $token_data refresh_token]} {
+                        debug_log "Attempting automatic token refresh..."
+                        update_status "Token expired, refreshing..." blue
+                        
+                        set new_token_data [refresh_access_token $token_data]
+                        
+                        if {[dict size $new_token_data] > 0} {
+                            # Refresh successful!
+                            set capability [check_token_capability $new_token_data]
+                            set access_token [dict get $new_token_data access_token]
+                            
+                            if {[dict exists $new_token_data expires_at]} {
+                                set expires_at [dict get $new_token_data expires_at]
+                            } else {
+                                set expires_at "unknown"
+                            }
+                            
+                            debug_log "✓ Token refresh successful! New capability: $capability"
+                            update_status "✓ Token refreshed successfully (capability: $capability)" green
+                            
+                            return [list $access_token $capability $expires_at]
+                        } else {
+                            # Refresh failed
+                            debug_log "Token refresh failed, falling back to rclone.conf"
+                            update_status "Token refresh failed, falling back to rclone token..." orange
+                        }
+                    } else {
+                        debug_log "No refresh_token available, falling back to rclone.conf"
+                        update_status "Token expired (no refresh token), falling back to rclone token..." orange
+                    }
+                } else {
+                    # Cannot determine expiration (-1)
+                    debug_log "Cannot determine token expiration, treating as potentially valid"
+                    set capability [check_token_capability $token_data]
+                    set access_token [dict get $token_data access_token]
+                    
+                    debug_log "Using token.json with capability: $capability (expiration unknown)"
+                    
+                    return [list $access_token $capability "unknown"]
+                }
             } else {
                 debug_log "ERROR: No access_token in parsed JSON"
             }
         } else {
             debug_log "Error reading token.json: $parse_error, falling back to rclone.conf"
         }
+    } else {
+        debug_log "token.json not found, using rclone.conf"
     }
     
     # Fallback to rclone.conf (assume read-only)
+    if {$require_capability eq "full"} {
+        debug_log "Full capability required but only rclone token available"
+        update_status "❌ Operation requires full permissions. Please re-authenticate." red
+        return [list "" "insufficient" "n/a"]
+    }
+    
     set access_token [get_access_token $rclone_remote]
     if {$access_token ne ""} {
         debug_log "Using rclone.conf token (read-only mode)"
-        return [list $access_token "read-only"]
+        update_status "Using rclone.conf token (read-only)" blue
+        return [list $access_token "read-only" "unknown"]
     }
     
-    return [list "" "unknown"]
+    return [list "" "unknown" "unknown"]
 }
 
 proc save_token_json {token_dict} {
@@ -1143,6 +1326,7 @@ proc oauth_modal_check_completion {modal_window status_label start_time} {
                 global token_capability remote_entry
                 set token_result [get_access_token_with_capability [$remote_entry get]]
                 set token_capability [lindex $token_result 1]
+                # Ignore expires_at (3rd element) here
                 
                 # Success - close dialog immediately (no confirmation needed)
                 set oauth_modal_result 1
@@ -1220,6 +1404,7 @@ proc oauth_modal_reload_token {modal_window status_label reload_btn} {
         set token_result [get_access_token_with_capability [$remote_entry get]]
         set access_token [lindex $token_result 0]
         set capability [lindex $token_result 1]
+        # expires_at is 3rd element but not needed here
         
         if {$access_token eq ""} {
             error "Invalid or expired token"
@@ -1352,7 +1537,7 @@ proc show_oauth_modal_dialog {} {
 }
 
 proc make_http_request {url headers {method GET} {body ""}} {
-    # Enhanced HTTP request supporting GET, POST, DELETE
+    # Enhanced HTTP request supporting GET, POST, DELETE with better 401 handling
     set token [dict get $headers Authorization]
     
     if {[catch {
@@ -1369,7 +1554,27 @@ proc make_http_request {url headers {method GET} {body ""}} {
         http::cleanup $response
         
         if {$status ne "200" && $status ne "201" && $status ne "204"} {
-            puts "ERROR: HTTP $status - URL: $url"
+            # Enhanced error message for 401 (authentication) errors
+            if {$status eq "401"} {
+                # Try to parse error response for better message
+                if {[catch {json::json2dict $data} error_dict] == 0} {
+                    if {[dict exists $error_dict error]} {
+                        set error_info [dict get $error_dict error]
+                        if {[dict exists $error_info code]} {
+                            set error_code [dict get $error_info code]
+                            if {$error_code eq "InvalidAuthenticationToken" || [string match "*expired*" [string tolower $error_code]]} {
+                                puts "ERROR: HTTP 401 - Token expired or invalid"
+                                puts "ERROR: $data"
+                                set result [list $status "TOKEN_EXPIRED: $data"]
+                                return $result
+                            }
+                        }
+                    }
+                }
+                puts "ERROR: HTTP 401 - Authentication failed - URL: $url"
+            } else {
+                puts "ERROR: HTTP $status - URL: $url"
+            }
             puts "ERROR: Response data: $data"
         }
         
@@ -1505,6 +1710,7 @@ proc ensure_edit_capability {} {
     set result [get_access_token_with_capability [$remote_entry get]]
     set access_token [lindex $result 0]
     set capability [lindex $result 1]
+    # expires_at is 3rd element but not needed here
     set token_capability $capability
     
     if {$capability eq "full"} {
@@ -1590,6 +1796,7 @@ proc on_invite_user_click {} {
         # Get access token
         set result [get_access_token_with_capability [$remote_entry get]]
         set access_token [lindex $result 0]
+        # capability is 2nd element, expires_at is 3rd (not needed here)
         
         if {$access_token eq ""} {
             update_status "Error: No access token available" red
@@ -1652,6 +1859,7 @@ proc on_remove_selected_click {} {
     # Get access token
     set result [get_access_token_with_capability [$remote_entry get]]
     set access_token [lindex $result 0]
+    # capability is 2nd element, expires_at is 3rd (not needed here)
     
     if {$access_token eq ""} {
         update_status "Error: No access token available" red
@@ -2076,14 +2284,33 @@ proc remove_user_permissions_cli {path user_email max_depth item_type dry_run re
     }
     puts ""
     
-    # Get access token
-    set access_token [get_access_token $remote_name]
-    if {$access_token eq ""} {
-        puts "❌ Failed to get access token"
+    # Get access token with full capability requirement
+    set result [get_access_token_with_capability $remote_name "full"]
+    set access_token [lindex $result 0]
+    set capability [lindex $result 1]
+    
+    if {$access_token eq "" || $capability ne "full"} {
+        puts "❌ Operation requires full permissions (Files.ReadWrite.All + Sites.Manage.All)"
+        puts ""
+        puts "This operation failed because:"
+        if {$capability eq "insufficient"} {
+            puts "  - token.json is expired or missing"
+            puts "  - rclone.conf token only has read-only permissions"
+        } else {
+            puts "  - No valid authentication token available"
+        }
+        puts ""
+        puts "To fix this:"
+        puts "  1. Run the script in GUI mode (wish acl-inspector.tcl)"
+        puts "  2. Trigger an operation requiring permissions (Invite or Remove)"
+        puts "  3. Complete browser authentication"
+        puts "  4. Try this command again"
+        puts ""
+        puts "Alternatively, manually update token.json with a valid full-permission token."
         return
     }
     
-    puts "✅ Successfully extracted access token from rclone.conf"
+    puts "✅ Using token with full permissions"
     
     set target_user_lower [string tolower $user_email]
     set items_to_remove {}
@@ -2256,14 +2483,33 @@ proc invite_user_cli {path user_email read_only remote_name} {
     puts "Access level: [expr {$read_only ? "read-only" : "read/write"}]"
     puts ""
     
-    # Get access token
-    set access_token [get_access_token $remote_name]
-    if {$access_token eq ""} {
-        puts "❌ Failed to get access token"
+    # Get access token with full capability requirement
+    set result [get_access_token_with_capability $remote_name "full"]
+    set access_token [lindex $result 0]
+    set capability [lindex $result 1]
+    
+    if {$access_token eq "" || $capability ne "full"} {
+        puts "❌ Operation requires full permissions (Files.ReadWrite.All + Sites.Manage.All)"
+        puts ""
+        puts "This operation failed because:"
+        if {$capability eq "insufficient"} {
+            puts "  - token.json is expired or missing"
+            puts "  - rclone.conf token only has read-only permissions"
+        } else {
+            puts "  - No valid authentication token available"
+        }
+        puts ""
+        puts "To fix this:"
+        puts "  1. Run the script in GUI mode (wish acl-inspector.tcl)"
+        puts "  2. Trigger an operation requiring permissions (Invite or Remove)"
+        puts "  3. Complete browser authentication"
+        puts "  4. Try this command again"
+        puts ""
+        puts "Alternatively, manually update token.json with a valid full-permission token."
         return
     }
     
-    puts "✅ Successfully extracted access token from rclone.conf"
+    puts "✅ Using token with full permissions"
     
     # Get item ID from path
     if {$path eq "/"} {
@@ -2532,6 +2778,7 @@ proc fetch_acl {{item_path ""} {remote_name "OneDrive"} {target_dir ""}} {
     set result [get_access_token_with_capability $remote_name]
     set access_token [lindex $result 0]
     set capability [lindex $result 1]
+    set expires_at [lindex $result 2]
     set token_capability $capability
     
     if {$access_token eq ""} {
@@ -2540,7 +2787,14 @@ proc fetch_acl {{item_path ""} {remote_name "OneDrive"} {target_dir ""}} {
     
     debug_log "Token capability: $capability"
     
-    update_status "✅ Using token (capability: $capability)" green
+    # Format expiration info for status message
+    if {$expires_at ne "unknown" && $expires_at ne "n/a"} {
+        set exp_display " (expires: $expires_at)"
+    } else {
+        set exp_display ""
+    }
+    
+    update_status "✅ Using token (capability: $capability)$exp_display" green
     
     # Construct the full path if target_dir is specified
     set full_path $item_path
@@ -2558,7 +2812,11 @@ proc fetch_acl {{item_path ""} {remote_name "OneDrive"} {target_dir ""}} {
     set data [lindex $result 1]
     
     if {$status ne "200"} {
-        if {$status eq "error"} {
+        # Handle 401 errors specially - token might have expired
+        if {$status eq "401" && $capability eq "full" && [string match "*TOKEN_EXPIRED*" $data]} {
+            update_status "❌ Token expired despite refresh attempt. Please re-authenticate." red
+            return
+        } elseif {$status eq "error"} {
             update_status "❌ HTTP request failed: $data" red
         } else {
             update_status "❌ Failed to get item info: $status - $data" red
