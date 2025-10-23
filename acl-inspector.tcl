@@ -330,8 +330,11 @@ proc populate_column {col_index folder_id folder_path} {
     $listbox insert end "Loading..."
     update
     
-    # Get access token
-    set access_token [get_access_token [$remote_entry get]]
+    # Get access token (any capability is fine for browsing)
+    set result [get_access_token_with_capability [$remote_entry get] ""]
+    set access_token [lindex $result 0]
+    set capability [lindex $result 1]
+    
     if {$access_token eq ""} {
         $listbox delete 0 end
         $listbox insert end "❌ No access token"
@@ -485,7 +488,7 @@ proc on_fetch_button_click {} {
 }
 
 # ============================================================================
-# Legacy Utility Functions
+# Utility Functions
 # ============================================================================
 
 
@@ -2662,23 +2665,11 @@ proc scan_items_recursive {folder_id access_token max_depth current_depth folder
     }
 }
 
-proc remove_user_permissions_cli {path user_email max_depth item_type dry_run remote_name} {
-    # CLI wrapper for removing user permissions
-    puts "🗑️  Removing user permissions"
-    puts "User: $user_email"
-    puts "Starting path: $path"
-    if {$max_depth > 0} {
-        puts "Max depth: $max_depth"
-        puts "Item type: $item_type"
-    } else {
-        puts "Mode: Non-recursive (single item only)"
-    }
-    if {$dry_run} {
-        puts "⚠️  DRY RUN MODE - No changes will be made"
-    }
-    puts ""
+proc cli_get_full_token {remote_name} {
+    # Helper function for CLI operations requiring full permissions
+    # Returns: {access_token} on success, empty string on failure
+    # Handles all error messaging internally
     
-    # Get access token with full capability requirement
     set result [get_access_token_with_capability $remote_name "full"]
     set access_token [lindex $result 0]
     set capability [lindex $result 1]
@@ -2701,10 +2692,56 @@ proc remove_user_permissions_cli {path user_email max_depth item_type dry_run re
         puts "  4. Try this command again"
         puts ""
         puts "Alternatively, manually update token.json with a valid full-permission token."
-        return
+        return ""
     }
     
     puts "✅ Using token with full permissions"
+    return $access_token
+}
+
+proc cli_get_item_from_path {path access_token} {
+    # Helper function to get item ID and dict from path
+    # Returns: {item_id item_dict} on success, empty list on failure
+    # Handles all error messaging internally
+    
+    set item_url [get_item_url_from_path $path]
+    set headers [list Authorization "Bearer $access_token"]
+    set result [make_http_request $item_url $headers]
+    set status [lindex $result 0]
+    set data [lindex $result 1]
+    
+    if {$status ne "200"} {
+        puts "❌ Failed to get item: $status"
+        return {}
+    }
+    
+    set item_dict [json::json2dict $data]
+    set item_id [dict get $item_dict id]
+    
+    return [list $item_id $item_dict]
+}
+
+proc remove_user_permissions_cli {path user_email max_depth item_type dry_run remote_name} {
+    # CLI wrapper for removing user permissions
+    puts "🗑️  Removing user permissions"
+    puts "User: $user_email"
+    puts "Starting path: $path"
+    if {$max_depth > 0} {
+        puts "Max depth: $max_depth"
+        puts "Item type: $item_type"
+    } else {
+        puts "Mode: Non-recursive (single item only)"
+    }
+    if {$dry_run} {
+        puts "⚠️  DRY RUN MODE - No changes will be made"
+    }
+    puts ""
+    
+    # Get access token with full capability requirement
+    set access_token [cli_get_full_token $remote_name]
+    if {$access_token eq ""} {
+        return
+    }
     
     set target_user_lower [string tolower $user_email]
     set items_to_remove {}
@@ -2742,20 +2779,11 @@ proc remove_user_permissions_cli {path user_email max_depth item_type dry_run re
         set folders_per_level(0) 0
         
         # Get starting item ID
-        set item_url [get_item_url_from_path $path]
-        
-        set headers [list Authorization "Bearer $access_token"]
-        set result [make_http_request $item_url $headers]
-        set status [lindex $result 0]
-        set data [lindex $result 1]
-        
-        if {$status ne "200"} {
-            puts "❌ Failed to get item: $status"
+        set item_result [cli_get_item_from_path $path $access_token]
+        if {[llength $item_result] == 0} {
             return
         }
-        
-        set item_dict [json::json2dict $data]
-        set start_id [dict get $item_dict id]
+        lassign $item_result start_id item_dict
         
         # Recursively find items
         scan_items_recursive $start_id $access_token $max_depth 0 $path "" checked_folders folders_per_level shared_folders "filter" $target_user_lower $item_type
@@ -2868,48 +2896,17 @@ proc invite_user_cli {path user_email read_only remote_name} {
     puts ""
     
     # Get access token with full capability requirement
-    set result [get_access_token_with_capability $remote_name "full"]
-    set access_token [lindex $result 0]
-    set capability [lindex $result 1]
-    
-    if {$access_token eq "" || $capability ne "full"} {
-        puts "❌ Operation requires full permissions (Files.ReadWrite.All + Sites.Manage.All)"
-        puts ""
-        puts "This operation failed because:"
-        if {$capability eq "insufficient"} {
-            puts "  - token.json is expired or missing"
-            puts "  - rclone.conf token only has read-only permissions"
-        } else {
-            puts "  - No valid authentication token available"
-        }
-        puts ""
-        puts "To fix this:"
-        puts "  1. Run the script in GUI mode (wish acl-inspector.tcl)"
-        puts "  2. Trigger an operation requiring permissions (Invite or Remove)"
-        puts "  3. Complete browser authentication"
-        puts "  4. Try this command again"
-        puts ""
-        puts "Alternatively, manually update token.json with a valid full-permission token."
+    set access_token [cli_get_full_token $remote_name]
+    if {$access_token eq ""} {
         return
     }
-    
-    puts "✅ Using token with full permissions"
     
     # Get item ID from path
-    set item_url [get_item_url_from_path $path]
-    
-    set headers [list Authorization "Bearer $access_token"]
-    set result [make_http_request $item_url $headers]
-    set status [lindex $result 0]
-    set data [lindex $result 1]
-    
-    if {$status ne "200"} {
-        puts "❌ Failed to get item: $status"
+    set item_result [cli_get_item_from_path $path $access_token]
+    if {[llength $item_result] == 0} {
         return
     }
-    
-    set item_dict [json::json2dict $data]
-    set item_id [dict get $item_dict id]
+    lassign $item_result item_id item_dict
     set item_name [dict get $item_dict name]
     
     puts "📁 Found item: $item_name (ID: $item_id)"
@@ -2948,23 +2945,15 @@ proc list_user_access {path user_email max_depth item_type remote_name} {
         puts "✅ Successfully extracted access token from rclone.conf"
         
         # Get item ID from path
-        set item_url [get_item_url_from_path $path]
-        
-        set headers [list Authorization "Bearer $access_token"]
-        set result [make_http_request $item_url $headers]
-        set status [lindex $result 0]
-        set data [lindex $result 1]
-        
-        if {$status ne "200"} {
-            puts "❌ Failed to get item: $status"
+        set item_result [cli_get_item_from_path $path $access_token]
+        if {[llength $item_result] == 0} {
             return
         }
-        
-        set item_dict [json::json2dict $data]
-        set item_id [dict get $item_dict id]
+        lassign $item_result item_id item_dict
         set item_name [dict get $item_dict name]
         
         # Get permissions
+        set headers [list Authorization "Bearer $access_token"]
         set permissions_url [build_graph_api_url "/me/drive/items/$item_id/permissions"]
         set result [make_http_request $permissions_url $headers]
         set status [lindex $result 0]
@@ -3031,15 +3020,10 @@ proc scan_shared_folders_user_impl {path user_email max_depth item_type remote_n
     # Start from specified path or root
     if {[catch {
         if {$path ne "/" && $path ne ""} {
-            # Get the target directory by path - URL encode the path
-            set target_url [get_item_url_from_path $path]
-            set result [make_http_request $target_url $headers]
-            set status [lindex $result 0]
-            set data [lindex $result 1]
-            
-            if {$status eq "200"} {
-                set target_data [json::json2dict $data]
-                set target_id [dict get $target_data id]
+            # Get the target directory by path
+            set item_result [cli_get_item_from_path $path $access_token]
+            if {[llength $item_result] > 0} {
+                lassign $item_result target_id target_data
                 
                 puts "📂 Starting recursive search from: $path"
                 scan_items_recursive $target_id $access_token $max_depth 0 $path "" checked_folders folders_per_level shared_folders "filter" $target_user_lower $item_type
@@ -3049,19 +3033,14 @@ proc scan_shared_folders_user_impl {path user_email max_depth item_type remote_n
             }
         } else {
             # Start from root
-            set root_url [get_item_url_from_path "/"]
-            set result [make_http_request $root_url $headers]
-            set status [lindex $result 0]
-            set data [lindex $result 1]
-            
-            if {$status eq "200"} {
-                set root_data [json::json2dict $data]
-                set root_id [dict get $root_data id]
+            set item_result [cli_get_item_from_path "/" $access_token]
+            if {[llength $item_result] > 0} {
+                lassign $item_result root_id root_data
                 
                 puts "📂 Starting recursive search from root..."
                 scan_items_recursive $root_id $access_token $max_depth 0 "" "" checked_folders folders_per_level shared_folders "filter" $target_user_lower $item_type
             } else {
-                puts "⚠️  Failed to get root: $status"
+                puts "⚠️  Failed to get root"
                 return
             }
         }
