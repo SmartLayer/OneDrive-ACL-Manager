@@ -73,8 +73,8 @@ set action_buttons_frame ""
 
 # Multi-column browser variables
 set column_list {}        ;# List of column widgets
-set column_data {}        ;# List of column data (each element: {folder_id path items})
-set selected_item {}      ;# Currently selected item {col_index item_index id path is_folder}
+set column_data {}        ;# List of column data (each element: {folder_id items})
+set selected_item {}      ;# Currently selected item {col_index item_index id is_folder}
 set fetch_button ""       ;# Fetch ACL button widget
 set acl_path_label ""     ;# Label showing path of current ACL display
 
@@ -307,11 +307,11 @@ proc destroy_columns_after {col_index} {
     set column_data [lrange $column_data 0 $col_index]
 }
 
-proc populate_column {col_index folder_id folder_path} {
+proc populate_column {col_index folder_id} {
     # Populate a column with the contents of a folder
     global column_list column_data access_token remote_entry
     
-    debug_log "Populating column $col_index with folder: $folder_path (ID: $folder_id)"
+    debug_log "Populating column $col_index with folder ID: $folder_id"
     
     # Ensure we have enough columns
     while {[llength $column_list] <= $col_index} {
@@ -367,8 +367,7 @@ proc populate_column {col_index folder_id folder_path} {
             set item_data [dict create \
                 name $child_name \
                 id $child_id \
-                is_folder $is_folder \
-                path [expr {$folder_path eq "" ? $child_name : "$folder_path/$child_name"}]]
+                is_folder $is_folder]
             
             if {$is_folder} {
                 lappend folders $item_data
@@ -396,7 +395,7 @@ proc populate_column {col_index folder_id folder_path} {
             lappend column_data {}
         }
         set column_data [lreplace $column_data $col_index $col_index \
-            [dict create folder_id $folder_id path $folder_path items $items_data]]
+            [dict create folder_id $folder_id items $items_data]]
         
         debug_log "Column $col_index populated with [llength $items_data] items"
     } else {
@@ -426,17 +425,15 @@ proc on_column_item_click {col_index widget y_coord} {
     
     set item_name [dict get $item name]
     set item_id [dict get $item id]
-    set item_path [dict get $item path]
     set is_folder [dict get $item is_folder]
     
-    debug_log "Clicked: $item_path (folder: $is_folder)"
+    debug_log "Clicked: $item_name (ID: $item_id, folder: $is_folder)"
     
     # Update selected item
     set selected_item [dict create \
         col_index $col_index \
         item_index $item_index \
         id $item_id \
-        path $item_path \
         is_folder $is_folder]
     
     # Update URL bar
@@ -451,7 +448,7 @@ proc on_column_item_click {col_index widget y_coord} {
     # If it's a folder, destroy columns after this one and create a new column
     if {$is_folder} {
         destroy_columns_after $col_index
-        populate_column [expr $col_index + 1] $item_id $item_path
+        populate_column [expr $col_index + 1] $item_id
     } else {
         # If it's a file, just destroy columns after this one
         destroy_columns_after $col_index
@@ -3714,7 +3711,7 @@ if {[info commands tk] ne ""} {
     gui_update_status "OneDrive ACL Lister - Ready to browse and fetch ACL information" blue
     
     # Populate first column with root folder
-    populate_column 0 "root" ""
+    populate_column 0 "root"
 } else {
     main $argc $argv
 }
