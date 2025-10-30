@@ -1044,6 +1044,7 @@ proc get_access_token {{rclone_remote ""}} {
     set access_token ""
     if {[catch {json::json2dict $token_json} token_dict] == 0} {
         # Check if token is expired
+        set token_is_expired 0
         if {[dict exists $token_dict expiry]} {
             set expiry_str [dict get $token_dict expiry]
             debug_log "Token expiry string: $expiry_str"
@@ -1077,20 +1078,46 @@ proc get_access_token {{rclone_remote ""}} {
                 set current_time [clock seconds]
                 
                 if {$current_time >= $expiry_time} {
-                    puts "❌ Error: Token has expired!"
-                    puts "   Token expired on: [clock format $expiry_time -format "%Y-%m-%d %H:%M:%S UTC"]"
-                    puts "   Current time is: [clock format $current_time -format "%Y-%m-%d %H:%M:%S UTC"]"
-                    puts ""
-                    puts "To fix this, please refresh your rclone token:"
-                    puts "   rclone config reconnect $rclone_remote"
-                    puts "Or re-authenticate completely:"
-                    puts "   rclone config"
-                    return ""
+                    set token_is_expired 1
+                    debug_log "Token in rclone.conf is EXPIRED"
+                    debug_log "Token expired on: [clock format $expiry_time -format "%Y-%m-%d %H:%M:%S UTC"]"
+                    debug_log "Current time is: [clock format $current_time -format "%Y-%m-%d %H:%M:%S UTC"]"
                 }
             } error_msg]} {
                 # Silently continue if expiry parsing fails - not critical
                 debug_log "Could not parse token expiry time '$expiry_str': $error_msg"
             }
+        }
+        
+        # If token is expired, try to refresh it using refresh_token
+        if {$token_is_expired && [dict exists $token_dict refresh_token]} {
+            debug_log "Attempting to refresh expired rclone token..."
+            set refreshed_token [refresh_access_token $token_dict]
+            if {[dict size $refreshed_token] > 0 && [dict exists $refreshed_token access_token]} {
+                debug_log "✓ Successfully refreshed rclone token"
+                set access_token [dict get $refreshed_token access_token]
+                # Note: The refresh_access_token function saves to token.json
+                # The rclone.conf is not updated, but that's okay - we have a fresh token
+                return $access_token
+            } else {
+                debug_log "Token refresh failed"
+                puts "❌ Error: Token has expired and refresh failed!"
+                puts ""
+                puts "To fix this, please refresh your rclone token:"
+                puts "   rclone config reconnect $rclone_remote"
+                puts "Or re-authenticate completely:"
+                puts "   rclone config"
+                return ""
+            }
+        } elseif {$token_is_expired} {
+            # No refresh_token available
+            puts "❌ Error: Token has expired!"
+            puts ""
+            puts "To fix this, please refresh your rclone token:"
+            puts "   rclone config reconnect $rclone_remote"
+            puts "Or re-authenticate completely:"
+            puts "   rclone config"
+            return ""
         }
         
         if {[dict exists $token_dict access_token]} {
