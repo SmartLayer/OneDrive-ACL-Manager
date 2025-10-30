@@ -327,7 +327,7 @@ proc populate_column {col_index folder_id} {
     update
     
     # Get access token (any capability is fine for browsing)
-    set result [get_access_token_with_capability [$remote_entry get] ""]
+    set result [get_access_token [$remote_entry get] "" "detailed" 1]
     set access_token [lindex $result 0]
     set capability [lindex $result 1]
     
@@ -898,13 +898,17 @@ proc find_onedrive_remotes {} {
     return $onedrive_remotes
 }
 
-proc get_access_token {{rclone_remote ""}} {
+proc parse_rclone_conf_token {rclone_remote} {
+    # Parse rclone.conf and extract token JSON for specified remote
+    # Returns: {success token_dict} where success is 1 if found, 0 if not found
+    # On error, prints messages and returns {0 {}}
+    
     set conf_path [get_rclone_conf_path]
     
     if {![file exists $conf_path]} {
         puts "Error: rclone config not found at $conf_path"
         puts "Please configure rclone first: rclone config"
-        return ""
+        return [list 0 {}]
     }
     
     # If no remote specified, find OneDrive remotes and use the first one
@@ -914,7 +918,7 @@ proc get_access_token {{rclone_remote ""}} {
         if {[llength $onedrive_remotes] == 0} {
             puts "Error: No OneDrive remotes found in rclone configuration"
             puts "Please configure OneDrive first: rclone config"
-            return ""
+            return [list 0 {}]
         }
         
         if {[llength $onedrive_remotes] == 1} {
@@ -973,129 +977,239 @@ proc get_access_token {{rclone_remote ""}} {
     if {$token_json eq ""} {
         puts "Error: No token found for remote '$rclone_remote'"
         puts "Please authenticate first: rclone authorize onedrive"
-        return ""
+        return [list 0 {}]
     }
     
     # Parse JSON token
-    set access_token ""
     if {[catch {json::json2dict $token_json} token_dict] == 0} {
-        # Check if token is expired
-        set token_is_expired 0
-        if {[dict exists $token_dict expiry]} {
-            set expiry_str [dict get $token_dict expiry]
-            debug_log "Token expiry string: $expiry_str"
+        return [list 1 $token_dict]
+    } else {
+        debug_log "ERROR: Failed to parse token JSON. Error: $token_dict"
+        puts "Error: Could not parse token JSON: $token_dict"
+        return [list 0 {}]
+    }
+}
+
+proc extract_and_sanitize_access_token {token_dict} {
+    # Extract access_token from token dict and sanitize it
+    # Returns: access_token string or empty string on failure
+    
+    if {![dict exists $token_dict access_token]} {
+        debug_log "ERROR: No access_token key in token_dict. Available keys: [dict keys $token_dict]"
+        return ""
+    }
+    
+    set access_token [dict get $token_dict access_token]
+    if {$access_token eq ""} {
+        return ""
+    }
+    
+    # Sanitize access token: remove quotes, trim whitespace, remove CR/LF
+    set access_token [string trim $access_token]
+    set access_token [regsub -all {^["']|["']$} $access_token ""]
+    set access_token [regsub -all {\r|\n} $access_token ""]
+    set access_token [string trim $access_token]
+    
+    return $access_token
+}
+
+proc get_access_token {rclone_remote {require_capability ""} {return_format "simple"} {try_token_json 1}} {
+    # Internal implementation: Get access tokens from both token.json and rclone.conf
+    # 
+    # Parameters:
+    #   rclone_remote        - Name of rclone remote (empty string = auto-detect)
+    #   require_capability   - "full" to require full permissions, "" for any
+    #   return_format        - "simple" (string) or "detailed" (list with capability)
+    #   try_token_json       - 1 to try token.json first, 0 to skip token.json
+    #
+    # Returns:
+    #   Simple format: access_token string or "" on failure
+    #   Detailed format: {access_token capability expires_at} or {"" "unknown" "unknown"} on failure
+    #
+    # Save logic:
+    #   - token.json refreshes ARE saved back to token.json
+    #   - rclone.conf refreshes are NOT saved (in-memory only)
+    
+    # Try token.json first (if enabled and return_format is detailed or explicitly requested)
+    if {$try_token_json} {
+        set token_file "./token.json"
+        if {[file exists $token_file]} {
+            set parse_error ""
+            set token_data {}
+            
+            # Try to read and parse token.json
             if {[catch {
-                # Normalize expiry string for cross-platform compatibility
-                # Handle format: "2025-10-31T01:22:03.598349702+10:00"
-                # Remove fractional seconds, normalize timezone
-                set expiry_normalized [regsub {\.\d+} $expiry_str ""]
-                # Try to parse with normalized timezone format
-                set expiry_time ""
+                set fh [open $token_file r]
+                set token_json [read $fh]
+                close $fh
                 
-                # Try with timezone in +HH:MM format first
-                if {[catch {
-                    set expiry_time [clock scan $expiry_normalized]
-                }]} {
-                    # If that fails, try normalizing timezone to +HHMM (Windows compatibility)
-                    set expiry_no_tz [regsub {([+-]\d{2}):(\d{2})$} $expiry_normalized {\1\2}]
-                    if {[catch {
-                        set expiry_time [clock scan $expiry_no_tz]
-                    }]} {
-                        # Last resort: try without timezone
-                        set expiry_no_tz [regsub {[+-]\d{2}:?\d{2}$} $expiry_normalized ""]
-                        if {[catch {
-                            set expiry_time [clock scan $expiry_no_tz]
-                        }]} {
-                            error "Could not parse expiry time"
+                debug_log "Read token.json, length: [string length $token_json]"
+                
+                set token_data [json::json2dict $token_json]
+                
+                debug_log "Successfully parsed JSON, keys: [dict keys $token_data]"
+            } parse_error] == 0} {
+                # Successfully parsed, now check expiration and refresh if needed
+                if {[dict exists $token_data access_token]} {
+                    set original_access_token [dict get $token_data access_token]
+                    
+                    # Try to refresh token if expired
+                    lassign [try_refresh_token_if_expired $token_data 0 "tokenjson"] refresh_success refreshed_token_data
+                    
+                    # Check if token was actually refreshed (access_token changed)
+                    set token_was_refreshed 0
+                    if {$refresh_success && [dict size $refreshed_token_data] > 0 && \
+                        [dict exists $refreshed_token_data access_token] && \
+                        [dict get $refreshed_token_data access_token] ne $original_access_token} {
+                        # Token was refreshed - use refreshed version
+                        set token_data $refreshed_token_data
+                        set token_was_refreshed 1
+                        debug_log "✓ Token refresh successful!"
+                        
+                        # Save refreshed token back to token.json (Rule 2: token.json refresh → save)
+                        save_token_json $refreshed_token_data
+                    } elseif {!$refresh_success} {
+                        # Refresh failed - check if token was expired
+                        set expiration_status [is_token_expired $token_data]
+                        if {$expiration_status == 1} {
+                            debug_log "Token expired and refresh failed, falling back to rclone.conf"
+                            # Fall through to rclone.conf fallback below
+                            set token_data {}
                         }
                     }
+                    
+                    # If we have valid token_data (either refreshed or original, not expired), use it
+                    if {[dict size $token_data] > 0 && [dict exists $token_data access_token]} {
+                        # Extract token info (from refreshed or original token_data)
+                        set capability [check_token_capability $token_data]
+                        set access_token [dict get $token_data access_token]
+                        
+                        if {[dict exists $token_data expires_at]} {
+                            set expires_at [dict get $token_data expires_at]
+                        } else {
+                            set expires_at "unknown"
+                        }
+                        
+                        debug_log "Token capability: $capability, expires: $expires_at"
+                        debug_log "Using token.json with capability: $capability"
+                        
+                        # Check capability requirement
+                        if {$require_capability eq "full" && $capability ne "full"} {
+                            debug_log "Full capability required but token.json has $capability"
+                            puts "❌ Operation requires full permissions. Please re-authenticate."
+                            if {$return_format eq "simple"} {
+                                return ""
+                            } else {
+                                return [list "" "insufficient" "n/a"]
+                            }
+                        }
+                        
+                        # Return in requested format
+                        if {$return_format eq "simple"} {
+                            return $access_token
+                        } else {
+                            return [list $access_token $capability $expires_at]
+                        }
+                    }
+                    # If token_data is empty (expired and refresh failed), fall through to rclone.conf
+                } else {
+                    debug_log "ERROR: No access_token in parsed JSON"
                 }
-                
-                set current_time [clock seconds]
-                
-                if {$current_time >= $expiry_time} {
-                    set token_is_expired 1
-                    debug_log "Token in rclone.conf is EXPIRED"
-                    debug_log "Token expired on: [clock format $expiry_time -format "%Y-%m-%d %H:%M:%S UTC"]"
-                    debug_log "Current time is: [clock format $current_time -format "%Y-%m-%d %H:%M:%S UTC"]"
-                }
-            } error_msg]} {
-                # Silently continue if expiry parsing fails - not critical
-                debug_log "Could not parse token expiry time '$expiry_str': $error_msg"
-            }
-        }
-        
-        # If token is expired, try to refresh it using refresh_token
-        if {$token_is_expired && [dict exists $token_dict refresh_token]} {
-            debug_log "Attempting to refresh expired rclone token..."
-            set refreshed_token [refresh_access_token $token_dict]
-            if {[dict size $refreshed_token] > 0 && [dict exists $refreshed_token access_token]} {
-                debug_log "✓ Successfully refreshed rclone token"
-                set access_token [dict get $refreshed_token access_token]
-                # Rule 1: DON'T save rclone.conf refreshed tokens - use in-memory only
-                debug_log "Using refreshed token in-memory only (not saving)"
-                return $access_token
             } else {
-                debug_log "Token refresh failed"
-                puts "❌ Error: Token has expired and refresh failed!"
-                puts ""
-                puts "To fix this, please refresh your rclone token:"
-                puts "   rclone config reconnect $rclone_remote"
-                puts "Or re-authenticate completely:"
-                puts "   rclone config"
-                return ""
+                debug_log "Error reading token.json: $parse_error, falling back to rclone.conf"
             }
-        } elseif {$token_is_expired} {
-            # No refresh_token available
-            puts "❌ Error: Token has expired!"
+        } else {
+            debug_log "token.json not found, using rclone.conf"
+        }
+    }
+    
+    # Fallback to rclone.conf
+    if {$require_capability eq "full"} {
+        debug_log "Full capability required but only rclone token available"
+        puts "❌ Operation requires full permissions. Please re-authenticate."
+        if {$return_format eq "simple"} {
+            return ""
+        } else {
+            return [list "" "insufficient" "n/a"]
+        }
+    }
+    
+    # Parse rclone.conf
+    lassign [parse_rclone_conf_token $rclone_remote] parse_success token_dict
+    
+    if {!$parse_success} {
+        if {$return_format eq "simple"} {
+            return ""
+        } else {
+            return [list "" "unknown" "unknown"]
+        }
+    }
+    
+    # Check if token is expired and refresh if needed
+    lassign [try_refresh_token_if_expired $token_dict 0 "rclone"] refresh_success refreshed_token
+    
+    if {$refresh_success && [dict size $refreshed_token] > 0} {
+        # Token was refreshed (expired and had refresh_token)
+        debug_log "✓ Successfully refreshed rclone token"
+        set token_dict $refreshed_token
+        # Rule 1: DON'T save rclone.conf refreshed tokens - use in-memory only
+        debug_log "Using refreshed token in-memory only (not saving)"
+    } elseif {!$refresh_success && [dict exists $token_dict expiry]} {
+        # Refresh was attempted but failed (expired with no refresh_token or refresh failed)
+        set expiry_status [check_rclone_token_expiry $token_dict]
+        if {$expiry_status == 1} {
+            puts "❌ Error: Token has expired and refresh failed!"
             puts ""
             puts "To fix this, please refresh your rclone token:"
             puts "   rclone config reconnect $rclone_remote"
             puts "Or re-authenticate completely:"
             puts "   rclone config"
-            return ""
-        }
-        
-        if {[dict exists $token_dict access_token]} {
-            set access_token [dict get $token_dict access_token]
-            if {$access_token eq ""} {
-                puts "Error: No access_token in token JSON"
-                puts "Token may be expired. Please re-authenticate: rclone authorize onedrive"
+            if {$return_format eq "simple"} {
+                return ""
             } else {
-                # Sanitize access token: remove quotes, trim whitespace, remove CR/LF
-                set access_token [string trim $access_token]
-                set access_token [regsub -all {^["']|["']$} $access_token ""]
-                set access_token [regsub -all {\r|\n} $access_token ""]
-                set access_token [string trim $access_token]
-                
-                debug_log "Successfully extracted access token from rclone.conf"
-            }
-        } else {
-            debug_log "ERROR: No access_token key in token_dict. Available keys: [dict keys $token_dict]"
-            puts "Error: No access_token in token JSON"
-            puts "Token may be expired. Please re-authenticate: rclone authorize onedrive"
-        }
-        
-        # IMPORTANT: rclone.conf tokens are in a format that Microsoft Graph API doesn't accept directly
-        # They must be refreshed first, regardless of expiry timestamp
-        if {$access_token ne "" && [dict exists $token_dict refresh_token]} {
-            debug_log "Refreshing rclone.conf token (required for Microsoft Graph API compatibility)"
-            set refreshed_token [refresh_access_token $token_dict]
-            if {[dict size $refreshed_token] > 0 && [dict exists $refreshed_token access_token]} {
-                debug_log "✓ Successfully refreshed rclone token"
-                set access_token [dict get $refreshed_token access_token]
-                # Rule 1: DON'T save rclone.conf refreshed tokens - use in-memory only
-                debug_log "Using refreshed token in-memory only (not saving)"
-            } else {
-                debug_log "⚠️ Token refresh failed, trying original token anyway"
+                return [list "" "unknown" "unknown"]
             }
         }
-    } else {
-        debug_log "ERROR: Failed to parse token JSON. Error: $token_dict"
-        puts "Error: Could not parse token JSON: $token_dict"
     }
     
-    return $access_token
+    # Extract access_token from token_dict (either original or already checked)
+    set access_token [extract_and_sanitize_access_token $token_dict]
+    
+    if {$access_token eq ""} {
+        puts "Error: No access_token in token JSON"
+        puts "Token may be expired. Please re-authenticate: rclone authorize onedrive"
+        if {$return_format eq "simple"} {
+            return ""
+        } else {
+            return [list "" "unknown" "unknown"]
+        }
+    }
+    
+    debug_log "Successfully extracted access token from rclone.conf"
+    
+    # IMPORTANT: rclone.conf tokens are in a format that Microsoft Graph API doesn't accept directly
+    # They must be refreshed first, regardless of expiry timestamp
+    if {[dict exists $token_dict refresh_token]} {
+        debug_log "Refreshing rclone.conf token (required for Microsoft Graph API compatibility)"
+        lassign [try_refresh_token_if_expired $token_dict 1 "rclone"] force_refresh_success force_refreshed_token
+        
+        if {$force_refresh_success && [dict size $force_refreshed_token] > 0} {
+            debug_log "✓ Successfully refreshed rclone token"
+            set access_token [dict get $force_refreshed_token access_token]
+            # Rule 1: DON'T save rclone.conf refreshed tokens - use in-memory only
+            debug_log "Using refreshed token in-memory only (not saving)"
+        } else {
+            debug_log "⚠️ Token refresh failed, trying original token anyway"
+        }
+    }
+    
+    # Return in requested format
+    if {$return_format eq "simple"} {
+        return $access_token
+    } else {
+        debug_log "Using rclone.conf token (read-only mode)"
+        return [list $access_token "read-only" "unknown"]
+    }
 }
 
 # ============================================================================
@@ -1165,6 +1279,133 @@ proc is_token_expired {token_data} {
     }
     
     return $result
+}
+
+proc check_rclone_token_expiry {token_data} {
+    # Check if rclone.conf token is expired (uses "expiry" field, not "expires_at")
+    # Returns: 1 if expired, 0 if valid, -1 if cannot determine
+    # This handles rclone.conf format which uses "expiry" with timezone info
+    
+    if {![dict exists $token_data expiry]} {
+        return -1
+    }
+    
+    set expiry_str [dict get $token_data expiry]
+    debug_log "Token expiry string: $expiry_str"
+    
+    if {[catch {
+        # Normalize expiry string for cross-platform compatibility
+        # Handle format: "2025-10-31T01:22:03.598349702+10:00"
+        # Remove fractional seconds, normalize timezone
+        set expiry_normalized [regsub {\.\d+} $expiry_str ""]
+        
+        # Try with timezone in +HH:MM format first
+        set expiry_time ""
+        if {[catch {
+            set expiry_time [clock scan $expiry_normalized]
+        }]} {
+            # If that fails, try normalizing timezone to +HHMM (Windows compatibility)
+            set expiry_no_tz [regsub {([+-]\d{2}):(\d{2})$} $expiry_normalized {\1\2}]
+            if {[catch {
+                set expiry_time [clock scan $expiry_no_tz]
+            }]} {
+                # Last resort: try without timezone
+                set expiry_no_tz [regsub {[+-]\d{2}:?\d{2}$} $expiry_normalized ""]
+                if {[catch {
+                    set expiry_time [clock scan $expiry_no_tz]
+                }]} {
+                    error "Could not parse expiry time"
+                }
+            }
+        }
+        
+        set current_time [clock seconds]
+        
+        if {$current_time >= $expiry_time} {
+            debug_log "Token in rclone.conf is EXPIRED"
+            debug_log "Token expired on: [clock format $expiry_time -format "%Y-%m-%d %H:%M:%S UTC"]"
+            debug_log "Current time is: [clock format $current_time -format "%Y-%m-%d %H:%M:%S UTC"]"
+            return 1
+        } else {
+            return 0
+        }
+    } error_msg]} {
+        # Silently continue if expiry parsing fails - not critical
+        debug_log "Could not parse token expiry time '$expiry_str': $error_msg"
+        return -1
+    }
+}
+
+proc try_refresh_token_if_expired {token_data {force_refresh 0} {token_source "auto"}} {
+    # Unified token refresh helper that checks expiry and refreshes if needed
+    # 
+    # Parameters:
+    #   token_data      - Token dictionary to check/refresh
+    #   force_refresh   - If 1, refresh even if not expired (for rclone.conf Graph API compatibility)
+    #   token_source    - "rclone" (uses expiry field) or "tokenjson" (uses expires_at) or "auto" (detect)
+    #
+    # Returns: {success refreshed_token_data} where success is 1 if refreshed/valid, 0 if failed
+    #          On success, returns refreshed token_data dict (or original if not expired and not forced)
+    #          On failure, returns empty dict
+    
+    # Detect token source if auto
+    if {$token_source eq "auto"} {
+        if {[dict exists $token_data expiry]} {
+            set token_source "rclone"
+        } elseif {[dict exists $token_data expires_at]} {
+            set token_source "tokenjson"
+        } else {
+            # Cannot determine source, treat as potentially valid
+            return [list 1 $token_data]
+        }
+    }
+    
+    # Check if refresh is needed
+    set needs_refresh 0
+    
+    if {$force_refresh} {
+        set needs_refresh 1
+        debug_log "Force refresh requested (for Graph API compatibility)"
+    } else {
+        # Check expiry based on token source
+        if {$token_source eq "rclone"} {
+            set expiry_status [check_rclone_token_expiry $token_data]
+            if {$expiry_status == 1} {
+                set needs_refresh 1
+                debug_log "rclone.conf token is expired, refresh needed"
+            }
+        } else {
+            # token.json format
+            set expiry_status [is_token_expired $token_data]
+            if {$expiry_status == 1} {
+                set needs_refresh 1
+                debug_log "token.json token is expired, refresh needed"
+            }
+        }
+    }
+    
+    # If no refresh needed, return original token
+    if {!$needs_refresh} {
+        return [list 1 $token_data]
+    }
+    
+    # Check if refresh_token is available
+    if {![dict exists $token_data refresh_token]} {
+        debug_log "Token needs refresh but no refresh_token available"
+        return [list 0 {}]
+    }
+    
+    # Attempt refresh
+    debug_log "Attempting to refresh token..."
+    set refreshed_token [refresh_access_token $token_data]
+    
+    if {[dict size $refreshed_token] > 0 && [dict exists $refreshed_token access_token]} {
+        debug_log "✓ Successfully refreshed token"
+        return [list 1 $refreshed_token]
+    } else {
+        debug_log "Token refresh failed"
+        return [list 0 {}]
+    }
 }
 
 proc refresh_access_token {token_data} {
@@ -1246,124 +1487,6 @@ proc refresh_access_token {token_data} {
         return {}
     }
     return $result
-}
-
-proc get_access_token_with_capability {rclone_remote {require_capability ""}} {
-    # Get access token and determine capability level with expiration checking
-    # Returns: {access_token capability_level expiration_info}
-    # capability_level: "full", "read-only", or "unknown"
-    # expiration_info: ISO timestamp or "unknown" or "expired"
-    # require_capability: if set to "full", only return full tokens (fail if only read-only available)
-    # 
-    # Save logic encapsulated internally:
-    #   - token.json refreshes ARE saved back to token.json
-    #   - rclone.conf refreshes are NOT saved (in-memory only)
-    
-    # Try local token.json first
-    set token_file "./token.json"
-    if {[file exists $token_file]} {
-        set parse_error ""
-        set token_data {}
-        
-        # Try to read and parse token.json
-        if {[catch {
-            set fh [open $token_file r]
-            set token_json [read $fh]
-            close $fh
-            
-            debug_log "Read token.json, length: [string length $token_json]"
-            
-            set token_data [json::json2dict $token_json]
-            
-            debug_log "Successfully parsed JSON, keys: [dict keys $token_data]"
-        } parse_error] == 0} {
-            # Successfully parsed, now check expiration
-            if {[dict exists $token_data access_token]} {
-                set expiration_status [is_token_expired $token_data]
-                
-                if {$expiration_status == 0} {
-                    # Token is valid and not expired
-                    set capability [check_token_capability $token_data]
-                    set access_token [dict get $token_data access_token]
-                    
-                    if {[dict exists $token_data expires_at]} {
-                        set expires_at [dict get $token_data expires_at]
-                    } else {
-                        set expires_at "unknown"
-                    }
-                    
-                    debug_log "Token capability: $capability, expires: $expires_at"
-                    debug_log "Using valid token.json with capability: $capability"
-                    
-                    return [list $access_token $capability $expires_at]
-                    
-                } elseif {$expiration_status == 1} {
-                    # Token is expired - try to refresh
-                    debug_log "Token in token.json is EXPIRED"
-                    
-                    if {[dict exists $token_data refresh_token]} {
-                        debug_log "Attempting automatic token refresh..."
-                        
-                        set new_token_data [refresh_access_token $token_data]
-                        
-                        if {[dict size $new_token_data] > 0} {
-                            # Refresh successful!
-                            set capability [check_token_capability $new_token_data]
-                            set access_token [dict get $new_token_data access_token]
-                            
-                            if {[dict exists $new_token_data expires_at]} {
-                                set expires_at [dict get $new_token_data expires_at]
-                            } else {
-                                set expires_at "unknown"
-                            }
-                            
-                            debug_log "✓ Token refresh successful! New capability: $capability"
-                            
-                            # Save refreshed token back to token.json (Rule 2: token.json refresh → save)
-                            save_token_json $new_token_data
-                            
-                            return [list $access_token $capability $expires_at]
-                        } else {
-                            # Refresh failed
-                            debug_log "Token refresh failed, falling back to rclone.conf"
-                        }
-                    } else {
-                        debug_log "No refresh_token available, falling back to rclone.conf"
-                    }
-                } else {
-                    # Cannot determine expiration (-1)
-                    debug_log "Cannot determine token expiration, treating as potentially valid"
-                    set capability [check_token_capability $token_data]
-                    set access_token [dict get $token_data access_token]
-                    
-                    debug_log "Using token.json with capability: $capability (expiration unknown)"
-                    
-                    return [list $access_token $capability "unknown"]
-                }
-            } else {
-                debug_log "ERROR: No access_token in parsed JSON"
-            }
-        } else {
-            debug_log "Error reading token.json: $parse_error, falling back to rclone.conf"
-        }
-    } else {
-        debug_log "token.json not found, using rclone.conf"
-    }
-    
-    # Fallback to rclone.conf (assume read-only)
-    if {$require_capability eq "full"} {
-        debug_log "Full capability required but only rclone token available"
-        puts "❌ Operation requires full permissions. Please re-authenticate."
-        return [list "" "insufficient" "n/a"]
-    }
-    
-    set access_token [get_access_token $rclone_remote]
-    if {$access_token ne ""} {
-        debug_log "Using rclone.conf token (read-only mode)"
-        return [list $access_token "read-only" "unknown"]
-    }
-    
-    return [list "" "unknown" "unknown"]
 }
 
 proc save_token_json {token_dict} {
@@ -1770,7 +1893,7 @@ proc oauth_modal_check_completion {modal_window status_label start_time} {
                 
                 # Update token capability
                 global token_capability remote_entry
-                set token_result [get_access_token_with_capability [$remote_entry get]]
+                set token_result [get_access_token [$remote_entry get] "" "detailed" 1]
                 set token_capability [lindex $token_result 1]
                 # Ignore expires_at (3rd element) here
                 
@@ -1847,7 +1970,7 @@ proc oauth_modal_reload_token {modal_window status_label reload_btn} {
     
     # Load and validate token
     if {[catch {
-        set token_result [get_access_token_with_capability [$remote_entry get]]
+        set token_result [get_access_token [$remote_entry get] "" "detailed" 1]
         set access_token [lindex $token_result 0]
         set capability [lindex $token_result 1]
         # expires_at is 3rd element but not needed here
@@ -2182,7 +2305,7 @@ proc ensure_edit_capability {} {
     global token_capability remote_entry
     
     # Get current token capability
-    set result [get_access_token_with_capability [$remote_entry get]]
+    set result [get_access_token [$remote_entry get] "" "detailed" 1]
     set access_token [lindex $result 0]
     set capability [lindex $result 1]
     # expires_at is 3rd element but not needed here
@@ -2269,7 +2392,7 @@ proc on_invite_user_click {} {
         }
         
         # Get access token
-        set result [get_access_token_with_capability [$remote_entry get]]
+        set result [get_access_token [$remote_entry get] "" "detailed" 1]
         set access_token [lindex $result 0]
         # capability is 2nd element, expires_at is 3rd (not needed here)
         
@@ -2332,7 +2455,7 @@ proc on_remove_selected_click {} {
     }
     
     # Get access token
-    set result [get_access_token_with_capability [$remote_entry get]]
+    set result [get_access_token [$remote_entry get] "" "detailed" 1]
     set access_token [lindex $result 0]
     # capability is 2nd element, expires_at is 3rd (not needed here)
     
@@ -2765,7 +2888,7 @@ proc cli_get_full_token {remote_name} {
     # Returns: {access_token} on success, empty string on failure
     # Handles all error messaging internally
     
-    set result [get_access_token_with_capability $remote_name "full"]
+    set result [get_access_token $remote_name "full" "detailed" 1]
     set access_token [lindex $result 0]
     set capability [lindex $result 1]
     
@@ -3193,7 +3316,7 @@ proc gui_fetch_acl {item_id remote_name} {
     }
     
     # Get access token with capability detection
-    set result [get_access_token_with_capability $remote_name]
+    set result [get_access_token $remote_name "" "detailed" 1]
     set access_token [lindex $result 0]
     set capability [lindex $result 1]
     set expires_at [lindex $result 2]
@@ -3582,7 +3705,7 @@ proc main {argc argv} {
         puts ""
         
         # Get access token with capability detection and auto-refresh
-        set result [get_access_token_with_capability $remote_name]
+        set result [get_access_token $remote_name "" "detailed" 1]
         set access_token [lindex $result 0]
         set capability [lindex $result 1]
         
