@@ -3519,76 +3519,39 @@ proc cli_fetch_acl {item_path remote_name {target_dir ""}} {
     puts "✅ ACL listing of: https://onedrive.live.com/?id=$item_id"
 }
 
+# Show help function
+proc show_usage {} {
+    puts "Usage: tclsh acl-inspector.tcl \[PATH\] \[OPTIONS\]"
+    puts ""
+    puts "PATH: Item to inspect (default: /)"
+    puts ""
+    puts "Options:"
+    puts "  --only-user USER       Filter to items USER has access to"
+    puts "  --remove-user USER     Remove USER's access (destructive)"
+    puts "  --invite USER          Invite USER with read/write access (inherited by children)"
+    puts "  -r, --recursive        Include children in scan"
+    puts "  --max-depth N          Max depth (default: 3, requires -r or explicit setting)"
+    puts "  --type TYPE            folders|files|both (default: folders)"
+    puts "  --dry-run              Preview changes (with --remove-user)"
+    puts "  --read-only            Grant read-only access (with --invite, default: read/write)"
+    puts "  --debug                Enable debug output"
+    puts "  --remote REMOTE        OneDrive remote (default: OneDrive)"
+    puts ""
+    puts "Examples:"
+    puts "  tclsh acl-inspector.tcl \"Work\""
+    puts "  tclsh acl-inspector.tcl \"Work\" --only-user bob@example.com -r"
+    puts "  tclsh acl-inspector.tcl \"Projects\" --invite alice@example.com"
+    puts "  tclsh acl-inspector.tcl \"Projects\" --invite bob@example.com --read-only"
+    puts "  tclsh acl-inspector.tcl \"Projects\" --remove-user ex@example.com -r --dry-run"
+    puts "  tclsh acl-inspector.tcl --only-user bob@example.com -r --type both"
+    exit 1
+}
 
-if {[info commands tk] ne ""} {
-    # ========================================================================
-    # GUI MODE FUNCTIONS
-    # ========================================================================
-    
-    # GUI-specific status and treeview functions
-    proc gui_update_status {message color} {
-        global status_label
-        puts "STATUS ($color): $message"  ;# Still log to console for debugging
-        if {[info exists status_label] && $status_label ne ""} {
-            $status_label configure -text $message -foreground $color
-        }
-    }
-    
-    proc gui_clear_treeview {} {
-        global tree
-        if {[info exists tree] && $tree ne ""} {
-            foreach item [$tree children {}] {
-                $tree delete $item
-            }
-            gui_update_status "Treeview cleared" green
-        }
-    }
-    
-    # Update gui_fetch_acl to use GUI-specific functions
-    # (We'll replace all update_status/clear_treeview calls)
-    
-    # ========================================================================
-    # GUI INITIALIZATION
-    # ========================================================================
-    
-    # GUI mode - Initialize browser with root folder
-    gui_update_status "OneDrive ACL Lister - Ready to browse and fetch ACL information" blue
-    
-    # Populate first column with root folder
-    populate_column 0 "root" ""
-} else {
+proc main {argc argv} {
     # CLI mode - process command line arguments with path-first interface
     # Usage: [PATH] [OPTIONS]
-    
-    # Show help function
-    proc show_usage {} {
-        puts "Usage: tclsh acl-inspector.tcl \[PATH\] \[OPTIONS\]"
-        puts ""
-        puts "PATH: Item to inspect (default: /)"
-        puts ""
-        puts "Options:"
-        puts "  --only-user USER       Filter to items USER has access to"
-        puts "  --remove-user USER     Remove USER's access (destructive)"
-        puts "  --invite USER          Invite USER with read/write access (inherited by children)"
-        puts "  -r, --recursive        Include children in scan"
-        puts "  --max-depth N          Max depth (default: 3, requires -r or explicit setting)"
-        puts "  --type TYPE            folders|files|both (default: folders)"
-        puts "  --dry-run              Preview changes (with --remove-user)"
-        puts "  --read-only            Grant read-only access (with --invite, default: read/write)"
-        puts "  --debug                Enable debug output"
-        puts "  --remote REMOTE        OneDrive remote (default: OneDrive)"
-        puts ""
-        puts "Examples:"
-        puts "  tclsh acl-inspector.tcl \"Work\""
-        puts "  tclsh acl-inspector.tcl \"Work\" --only-user bob@example.com -r"
-        puts "  tclsh acl-inspector.tcl \"Projects\" --invite alice@example.com"
-        puts "  tclsh acl-inspector.tcl \"Projects\" --invite bob@example.com --read-only"
-        puts "  tclsh acl-inspector.tcl \"Projects\" --remove-user ex@example.com -r --dry-run"
-        puts "  tclsh acl-inspector.tcl --only-user bob@example.com -r --type both"
-        exit 1
-    }
-    
-    if {![info exists argv] || [llength $argv] == 0} {
+
+    if {$argc == 0 || [llength $argv] == 0} {
         show_usage
     }
     
@@ -3798,4 +3761,44 @@ if {[info commands tk] ne ""} {
             puts "❌ No folders found or unable to access permissions"
         }
     }
-} 
+}
+
+if {[info commands tk] ne ""} {
+    # ========================================================================
+    # GUI MODE FUNCTIONS
+    # ========================================================================
+    
+    # GUI-specific status and treeview functions
+    proc gui_update_status {message color} {
+        global status_label
+        puts "STATUS ($color): $message"  ;# Still log to console for debugging
+        if {[info exists status_label] && $status_label ne ""} {
+            $status_label configure -text $message -foreground $color
+        }
+    }
+    
+    proc gui_clear_treeview {} {
+        global tree
+        if {[info exists tree] && $tree ne ""} {
+            foreach item [$tree children {}] {
+                $tree delete $item
+            }
+            gui_update_status "Treeview cleared" green
+        }
+    }
+    
+    # Update gui_fetch_acl to use GUI-specific functions
+    # (We'll replace all update_status/clear_treeview calls)
+    
+    # ========================================================================
+    # GUI INITIALIZATION
+    # ========================================================================
+    
+    # GUI mode - Initialize browser with root folder
+    gui_update_status "OneDrive ACL Lister - Ready to browse and fetch ACL information" blue
+    
+    # Populate first column with root folder
+    populate_column 0 "root" ""
+} else {
+    main $argc $argv
+}
