@@ -2875,21 +2875,33 @@ proc cli_path_to_item_id_and_dict {path access_token} {
     return [list $item_id $item_dict]
 }
 
-proc remove_user_permissions_cli {path user_email max_depth item_type dry_run remote_name} {
+proc cli_resolve_path_for_command {path remote_name} {
+    # Helper function to resolve path to item ID for CLI commands
+    # Handles token retrieval and all error cases
+    # Returns: {access_token item_id item_dict} on success, empty list on failure
+    # On failure, prints error message and returns empty list (caller should exit)
+    
+    # Get access token
+    set access_token [get_access_token $remote_name]
+    if {$access_token eq ""} {
+        puts "❌ Failed to get access token"
+        return {}
+    }
+    
+    # Resolve path to item ID
+    set item_result [cli_path_to_item_id_and_dict $path $access_token]
+    if {[llength $item_result] == 0} {
+        puts "❌ Failed to resolve path: $path"
+        return {}
+    }
+    
+    lassign $item_result item_id item_dict
+    return [list $access_token $item_id $item_dict]
+}
+
+proc remove_user_permissions_cli {item_id user_email max_depth item_type dry_run remote_name} {
     # CLI wrapper for removing user permissions
-    puts "🗑️  Removing user permissions"
-    puts "User: $user_email"
-    puts "Starting path: $path"
-    if {$max_depth > 0} {
-        puts "Max depth: $max_depth"
-        puts "Item type: $item_type"
-    } else {
-        puts "Mode: Non-recursive (single item only)"
-    }
-    if {$dry_run} {
-        puts "⚠️  DRY RUN MODE - No changes will be made"
-    }
-    puts ""
+    # Initial display messages should be handled by caller
     
     # Get access token with full capability requirement
     set access_token [cli_get_full_token $remote_name]
@@ -2902,14 +2914,7 @@ proc remove_user_permissions_cli {path user_email max_depth item_type dry_run re
     
     # Collect items with user permissions
     if {$max_depth == 0} {
-        # Non-recursive: just check this single path
-        set item_result [cli_path_to_item_id_and_dict $path $access_token]
-        if {[llength $item_result] == 0} {
-            puts "❌ Failed to get item ID for path: $path"
-            return
-        }
-        lassign $item_result item_id item_dict
-        
+        # Non-recursive: just check this single item
         lassign [get_folder_permissions $item_id $access_token] perm_status permissions
         if {$perm_status eq "ok"} {
             set has_user_perm [has_explicit_user_permission $permissions $target_user_lower]
@@ -2920,7 +2925,8 @@ proc remove_user_permissions_cli {path user_email max_depth item_type dry_run re
                     set perm_user_email [lindex $user_info 1]
                     if {[string tolower $perm_user_email] eq $target_user_lower} {
                         set perm_id [dict get $perm id]
-                        lappend items_to_remove [dict create path $path item_id $item_id perm_id $perm_id]
+                        # Store item_id and perm_id; path will be fetched lazily if needed
+                        lappend items_to_remove [dict create item_id $item_id perm_id $perm_id]
                     }
                 }
             }
@@ -2933,15 +2939,8 @@ proc remove_user_permissions_cli {path user_email max_depth item_type dry_run re
         set checked_folders {}
         set folders_per_level(0) 0
         
-        # Get starting item ID
-        set item_result [cli_path_to_item_id_and_dict $path $access_token]
-        if {[llength $item_result] == 0} {
-            return
-        }
-        lassign $item_result start_id item_dict
-        
-        # Recursively find items
-        scan_items_recursive $start_id $access_token $max_depth 0 $path "" checked_folders folders_per_level shared_folders "filter" $target_user_lower $item_type
+        # Recursively find items (pass "" for path - will be fetched lazily when needed)
+        scan_items_recursive $item_id $access_token $max_depth 0 "" "" checked_folders folders_per_level shared_folders "filter" $target_user_lower $item_type
         
         puts "✅ Scan complete. Found [llength $shared_folders] items."
         puts ""
@@ -2949,7 +2948,8 @@ proc remove_user_permissions_cli {path user_email max_depth item_type dry_run re
         # Extract item IDs and permission IDs from shared_folders
         foreach folder $shared_folders {
             set folder_id [dict get $folder id]
-            set folder_path [dict get $folder path]
+            # Note: folder_path from shared_folders dict will be "" or partial path
+            # We don't need it anymore since we'll fetch lazily if needed
             
             # Get permissions to find the specific permission ID for this user
             lassign [get_folder_permissions $folder_id $access_token] perm_status permissions
@@ -2959,7 +2959,8 @@ proc remove_user_permissions_cli {path user_email max_depth item_type dry_run re
                     set perm_user_email [lindex $user_info 1]
                     if {[string tolower $perm_user_email] eq $target_user_lower} {
                         set perm_id [dict get $perm id]
-                        lappend items_to_remove [dict create path $folder_path item_id $folder_id perm_id $perm_id]
+                        # Store only item_id and perm_id; path will be fetched lazily when needed
+                        lappend items_to_remove [dict create item_id $folder_id perm_id $perm_id]
                     }
                 }
             }
@@ -2973,7 +2974,9 @@ proc remove_user_permissions_cli {path user_email max_depth item_type dry_run re
     
     puts "Found [llength $items_to_remove] item(s) with permissions for $user_email:"
     foreach item $items_to_remove {
-        set item_path [dict get $item path]
+        set item_id [dict get $item item_id]
+        # Fetch path lazily for display
+        set item_path [get_item_path $item_id $access_token]
         puts "  - $item_path"
     }
     puts ""
@@ -2985,7 +2988,7 @@ proc remove_user_permissions_cli {path user_email max_depth item_type dry_run re
     
     # Confirm before removal
     puts "⚠️  This will remove $user_email's access from [llength $items_to_remove] item(s)."
-    puts -nonewline "Continue? \[y/N\]: "
+    puts -nonewline "Continue? [y/N]: "
     flush stdout
     set response [gets stdin]
     
@@ -3001,9 +3004,11 @@ proc remove_user_permissions_cli {path user_email max_depth item_type dry_run re
     set error_count 0
     
     foreach item $items_to_remove {
-        set item_path [dict get $item path]
         set item_id [dict get $item item_id]
         set perm_id [dict get $item perm_id]
+        
+        # Fetch path lazily for display
+        set item_path [get_item_path $item_id $access_token]
         
         set remove_result [remove_permission $item_id $perm_id $access_token]
         set remove_status [lindex $remove_result 0]
@@ -3027,28 +3032,15 @@ proc remove_user_permissions_cli {path user_email max_depth item_type dry_run re
 }
 
 
-proc invite_user_cli {path user_email read_only remote_name} {
-    # CLI wrapper for inviting user to a path
-    puts "📧 Inviting user to path: $path"
-    puts "User: $user_email"
-    puts "Access level: [expr {$read_only ? "read-only" : "read/write"}]"
-    puts ""
+proc invite_user_cli {item_id user_email read_only remote_name} {
+    # CLI wrapper for inviting user to an item (by ID)
+    # Initial display messages should be handled by caller
     
     # Get access token with full capability requirement
     set access_token [cli_get_full_token $remote_name]
     if {$access_token eq ""} {
         return
     }
-    
-    # Get item ID from path
-    set item_result [cli_path_to_item_id_and_dict $path $access_token]
-    if {[llength $item_result] == 0} {
-        return
-    }
-    lassign $item_result item_id item_dict
-    set item_name [dict get $item_dict name]
-    
-    puts "📁 Found item: $item_name (ID: $item_id)"
     
     # Invite user
     set role [expr {$read_only ? "read" : "write"}]
@@ -3065,15 +3057,13 @@ proc invite_user_cli {path user_email read_only remote_name} {
     }
 }
 
-proc list_user_access {path user_email max_depth item_type remote_name} {
+proc list_user_access {item_id user_email max_depth item_type remote_name} {
     # List items where user has access
+    # Initial display messages should be handled by caller
     # Supports both recursive (max_depth > 0) and non-recursive (max_depth = 0) modes
     
     if {$max_depth == 0} {
-        # Non-recursive mode: just check this path's ACL for user
-        puts "🔍 Checking access for user: $user_email"
-        puts "Path: $path"
-        puts ""
+        # Non-recursive mode: just check this item's ACL for user
         
         # Get access token
         set access_token [get_access_token $remote_name]
@@ -3082,14 +3072,6 @@ proc list_user_access {path user_email max_depth item_type remote_name} {
         }
         
         puts "✅ Successfully extracted access token from rclone.conf"
-        
-        # Get item ID from path
-        set item_result [cli_path_to_item_id_and_dict $path $access_token]
-        if {[llength $item_result] == 0} {
-            return
-        }
-        lassign $item_result item_id item_dict
-        set item_name [dict get $item_dict name]
         
         # Get permissions
         set headers [list Authorization "Bearer $access_token"]
@@ -3111,7 +3093,9 @@ proc list_user_access {path user_email max_depth item_type remote_name} {
         set has_permission [has_explicit_user_permission $permissions $target_user_lower]
         
         if {$has_permission} {
-            puts "✅ User $user_email has access to: $path"
+            # Fetch path lazily for display
+            set item_path [get_item_path $item_id $access_token]
+            puts "✅ User $user_email has access to: $item_path"
             
             # Show permission details
             foreach perm $permissions {
@@ -3125,22 +3109,20 @@ proc list_user_access {path user_email max_depth item_type remote_name} {
                 }
             }
         } else {
-            puts "ℹ️  User $user_email does not have explicit access to: $path"
+            # Fetch path lazily for display
+            set item_path [get_item_path $item_id $access_token]
+            puts "ℹ️  User $user_email does not have explicit access to: $item_path"
         }
         
     } else {
         # Recursive mode: use existing scan logic
-        scan_shared_folders_user_impl $path $user_email $max_depth $item_type $remote_name
+        scan_shared_folders_user_impl $item_id $user_email $max_depth $item_type $remote_name
     }
 }
 
-proc scan_shared_folders_user_impl {path user_email max_depth item_type remote_name} {
+proc scan_shared_folders_user_impl {item_id user_email max_depth item_type remote_name} {
     # Internal implementation of recursive user scan (renamed from scan_shared_folders_user)
-    puts "🔍 Scanning for items with user access: $user_email"
-    puts "Starting path: $path"
-    puts "Max depth: $max_depth"
-    puts "Item type: $item_type"
-    puts ""
+    # Initial display messages should be handled by caller
     
     # Get access token
     set access_token [get_access_token $remote_name]
@@ -3156,33 +3138,10 @@ proc scan_shared_folders_user_impl {path user_email max_depth item_type remote_n
     set folders_per_level(0) 0
     set target_user_lower [string tolower $user_email]
     
-    # Start from specified path or root
+    # Start scanning from provided item_id
     if {[catch {
-        if {$path ne "/" && $path ne ""} {
-            # Get the target directory by path
-            set item_result [cli_path_to_item_id_and_dict $path $access_token]
-            if {[llength $item_result] > 0} {
-                lassign $item_result target_id target_data
-                
-                puts "📂 Starting recursive search from: $path"
-                scan_items_recursive $target_id $access_token $max_depth 0 $path "" checked_folders folders_per_level shared_folders "filter" $target_user_lower $item_type
-            } else {
-                puts "⚠️  Path '$path' not found or not accessible"
-                return
-            }
-        } else {
-            # Start from root
-            set item_result [cli_path_to_item_id_and_dict "/" $access_token]
-            if {[llength $item_result] > 0} {
-                lassign $item_result root_id root_data
-                
-                puts "📂 Starting recursive search from root..."
-                scan_items_recursive $root_id $access_token $max_depth 0 "" "" checked_folders folders_per_level shared_folders "filter" $target_user_lower $item_type
-            } else {
-                puts "⚠️  Failed to get root"
-                return
-            }
-        }
+        # Recursively scan (pass "" for path - will be fetched lazily when needed for display)
+        scan_items_recursive $item_id $access_token $max_depth 0 "" "" checked_folders folders_per_level shared_folders "filter" $target_user_lower $item_type
     } error]} {
         puts "❌ Search error: $error"
     }
@@ -3438,80 +3397,6 @@ proc gui_fetch_acl {item_id remote_name} {
     gui_update_status "✅ ACL listing of: https://onedrive.live.com/?id=$item_id" green
 }
 
-# CLI version of fetch_acl - takes item_path, does lookup
-proc cli_fetch_acl {item_path remote_name {target_dir ""}} {
-    if {$item_path eq ""} {
-        puts "❌ Error: Please specify an item path"
-        return
-    }
-    
-    puts "Fetching ACL for: $item_path"
-    
-    # Get access token with capability detection
-    set result [get_access_token_with_capability $remote_name]
-    set access_token [lindex $result 0]
-    set capability [lindex $result 1]
-    set expires_at [lindex $result 2]
-    
-    if {$access_token eq ""} {
-        return
-    }
-    
-    debug_log "Token capability: $capability"
-    
-    # Format expiration info
-    if {$expires_at ne "unknown" && $expires_at ne "n/a"} {
-        set exp_display " (expires: $expires_at)"
-    } else {
-        set exp_display ""
-    }
-    
-    puts "✅ Using token (capability: $capability)$exp_display"
-    
-    # Construct the full path if target_dir is specified
-    set full_path $item_path
-    if {$target_dir ne ""} {
-        set full_path "$target_dir/$item_path"
-    }
-    
-    # Get item ID from path (LOOKUP - this is why CLI needs path)
-    set item_result [cli_path_to_item_id_and_dict $full_path $access_token]
-    if {[llength $item_result] == 0} {
-        puts "❌ Failed to get item ID for path: $full_path"
-        return
-    }
-    lassign $item_result item_id item_dict
-    
-    set item_name [dict get $item_dict name]
-    set item_type [expr {[dict exists $item_dict folder] ? "folder" : "file"}]
-    
-    puts "✅ Found $item_type: $item_name (ID: $item_id)"
-    
-    # Get permissions using shared function
-    puts "Getting ACL..."
-    set perm_result [fetch_permissions_by_id $item_id $access_token]
-    set perm_status [lindex $perm_result 0]
-    set permissions [lindex $perm_result 1]
-    
-    if {$perm_status ne "ok"} {
-        puts "❌ $permissions"
-        return
-    }
-    
-    set perm_count [llength $permissions]
-    
-    if {$perm_count == 0} {
-        puts "ℹ️ No permissions found for this item (empty ACL)"
-        return
-    }
-    
-    puts "✅ Found $perm_count permission(s) in ACL (Token: $capability)"
-    
-    # Display in CLI mode
-    display_acl_cli $permissions $item_id
-    
-    puts "✅ ACL listing of: https://onedrive.live.com/?id=$item_id"
-}
 
 # Show help function
 proc show_usage {} {
@@ -3677,13 +3562,67 @@ proc main {argc argv} {
     # Execute based on flags
     if {$invite_user ne ""} {
         # Invite user to path
-        invite_user_cli $path $invite_user $read_only $remote_name
+        puts "📧 Inviting user to path: $path"
+        puts "User: $invite_user"
+        puts "Access level: [expr {$read_only ? "read-only" : "read/write"}]"
+        puts ""
+        
+        # Resolve path to item ID (handles token and errors)
+        set resolve_result [cli_resolve_path_for_command $path $remote_name]
+        if {[llength $resolve_result] == 0} {
+            exit 1
+        }
+        lassign $resolve_result access_token item_id item_dict
+        set item_name [dict get $item_dict name]
+        puts "📁 Found item: $item_name (ID: $item_id)"
+        puts ""
+        
+        invite_user_cli $item_id $invite_user $read_only $remote_name
+        
     } elseif {$remove_user ne ""} {
         # Remove user permissions
-        remove_user_permissions_cli $path $remove_user $max_depth $item_type $dry_run $remote_name
+        puts "🗑️  Removing user permissions"
+        puts "User: $remove_user"
+        puts "Starting path: $path"
+        if {$max_depth > 0} {
+            puts "Max depth: $max_depth"
+            puts "Item type: $item_type"
+        } else {
+            puts "Mode: Non-recursive (single item only)"
+        }
+        if {$dry_run} {
+            puts "⚠️  DRY RUN MODE - No changes will be made"
+        }
+        puts ""
+        
+        # Resolve path to item ID (handles token and errors)
+        set resolve_result [cli_resolve_path_for_command $path $remote_name]
+        if {[llength $resolve_result] == 0} {
+            exit 1
+        }
+        lassign $resolve_result access_token item_id item_dict
+        
+        remove_user_permissions_cli $item_id $remove_user $max_depth $item_type $dry_run $remote_name
+        
     } elseif {$only_user ne ""} {
         # List user access
-        list_user_access $path $only_user $max_depth $item_type $remote_name
+        puts "🔍 Checking access for user: $only_user"
+        puts "Path: $path"
+        if {$max_depth > 0} {
+            puts "Max depth: $max_depth"
+            puts "Item type: $item_type"
+        }
+        puts ""
+        
+        # Resolve path to item ID (handles token and errors)
+        set resolve_result [cli_resolve_path_for_command $path $remote_name]
+        if {[llength $resolve_result] == 0} {
+            exit 1
+        }
+        lassign $resolve_result access_token item_id item_dict
+        
+        list_user_access $item_id $only_user $max_depth $item_type $remote_name
+        
     } else {
         # Default: show ACL with new recursive format
         puts "OneDrive ACL Inspector"
@@ -3707,24 +3646,13 @@ proc main {argc argv} {
         puts "✅ Using token (capability: $capability)"
         puts ""
         
-        # Get starting item ID
-        set item_url [get_item_url_from_path $path]
-        
-        set headers [list Authorization "Bearer $access_token"]
-        set result [make_http_request $item_url $headers]
-        set status [lindex $result 0]
-        set data [lindex $result 1]
-        
-        if {$status ne "200"} {
-            puts "❌ Failed to get item: $status"
-            if {$status eq "error"} {
-                puts "Error details: $data"
-            }
+        # Resolve path to item ID using helper function
+        set item_result [cli_path_to_item_id_and_dict $path $access_token]
+        if {[llength $item_result] == 0} {
+            puts "❌ Failed to resolve path: $path"
             exit 1
         }
-        
-        set item_dict [json::json2dict $data]
-        set start_id [dict get $item_dict id]
+        lassign $item_result start_id item_dict
         
         # Collect all folder permissions recursively
         set all_folders {}
