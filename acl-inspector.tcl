@@ -81,7 +81,7 @@ set acl_path_label ""     ;# Label showing path of current ACL display
 
 if {[info commands tk] ne ""} {
     # Declare global widget variables
-    global remote_entry url_entry fetch_button acl_path_label column_list column_data selected_item action_buttons_frame
+    global remote_entry url_entry fetch_button acl_path_label column_list column_data selected_item action_buttons_frame f
     
     # Create main window
     wm title . "OneDrive ACL Lister"
@@ -108,11 +108,11 @@ if {[info commands tk] ne ""} {
     }
 
     # Create main frame
-    set main_frame [ttk::frame .main]
-    pack $main_frame -fill both -expand yes -padx 10 -pady 10
+    set f [ttk::frame .main]
+    pack $f -fill both -expand yes -padx 10 -pady 10
 
     # Create input frame (top section)
-    set input_frame [ttk::frame $main_frame.input]
+    set input_frame [ttk::frame $f.input]
     pack $input_frame -fill x -pady {0 10}
 
     # OneDrive URL address bar (read-only, at top)
@@ -131,7 +131,7 @@ if {[info commands tk] ne ""} {
     # Don't pack this - it's hidden
 
     # Multi-column browser frame
-    set browser_frame [ttk::frame $main_frame.browser]
+    set browser_frame [ttk::frame $f.browser]
     pack $browser_frame -fill both -expand yes -pady {0 10}
 
     ttk::label $browser_frame.label -text "Browse OneDrive:"
@@ -154,7 +154,7 @@ if {[info commands tk] ne ""} {
     }
 
     # Fetch button frame (between browser and ACL display)
-    set fetch_frame [ttk::frame $main_frame.fetch]
+    set fetch_frame [ttk::frame $f.fetch]
     pack $fetch_frame -fill x -pady {5 10}
     
     set fetch_button [ttk::button $fetch_frame.button -text "Fetch ACL" -command on_fetch_button_click -state disabled]
@@ -171,7 +171,7 @@ if {[info commands tk] ne ""} {
     pack $action_buttons_frame.invite -side left -padx 2
 
     # ACL display section (lower half)
-    set acl_section [ttk::frame $main_frame.acl]
+    set acl_section [ttk::frame $f.acl]
     pack $acl_section -fill both -expand yes
 
     # ACL path label (shows which item's ACL is displayed)
@@ -191,57 +191,52 @@ if {[info commands tk] ne ""} {
     set tree_frame [ttk::frame $acl_section.tree]
     pack $tree_frame -fill both -expand yes
 
-    # Create treeview with scrollbars
-    set tree_container [ttk::frame $tree_frame.container]
-    pack $tree_container -fill both -expand yes
+    # Scrollbars
+    set h_scrollbar [ttk::scrollbar $tree_frame.hscroll -orient horizontal -command "$tree_frame.list xview"]
+    pack $h_scrollbar -side bottom -fill x
+    
+    set v_scrollbar [ttk::scrollbar $tree_frame.vscroll -orient vertical -command "$tree_frame.list yview"]
+    pack $v_scrollbar -side right -fill y
 
     # Treeview widget (with multi-select enabled)
-    set tree [ttk::treeview $tree_container.tree -columns {id roles user email link_type link_scope expires} -show {tree headings} -selectmode extended -height 10]
-    pack $tree -side left -fill both -expand yes
-
-    # Scrollbars
-    set v_scrollbar [ttk::scrollbar $tree_container.vscroll -orient vertical -command "$tree yview"]
-    pack $v_scrollbar -side right -fill y
-    $tree configure -yscrollcommand "$v_scrollbar set"
-
-    set h_scrollbar [ttk::scrollbar $tree_frame.hscroll -orient horizontal -command "$tree xview"]
-    pack $h_scrollbar -fill x
-    $tree configure -xscrollcommand "$h_scrollbar set"
+    ttk::treeview $tree_frame.list -columns {id roles user email link_type link_scope expires} -show {tree headings} -selectmode extended -height 10 \
+        -yscrollcommand "$v_scrollbar set" -xscrollcommand "$h_scrollbar set"
+    pack $tree_frame.list -side left -fill both -expand yes
 
     # Configure treeview columns
-    $tree heading #0 -text ""
-    $tree column #0 -width 100 -minwidth 80
+    $tree_frame.list heading #0 -text ""
+    $tree_frame.list column #0 -width 100 -minwidth 80
 
-    $tree heading id -text "ID"
-    $tree column id -width 200 -minwidth 150
+    $tree_frame.list heading id -text "ID"
+    $tree_frame.list column id -width 200 -minwidth 150
 
-    $tree heading roles -text "Roles"
-    $tree column roles -width 80 -minwidth 60
+    $tree_frame.list heading roles -text "Roles"
+    $tree_frame.list column roles -width 80 -minwidth 60
 
-    $tree heading user -text "User"
-    $tree column user -width 150 -minwidth 100
+    $tree_frame.list heading user -text "User"
+    $tree_frame.list column user -width 150 -minwidth 100
 
-    $tree heading email -text "Email"
-    $tree column email -width 200 -minwidth 150
+    $tree_frame.list heading email -text "Email"
+    $tree_frame.list column email -width 200 -minwidth 150
 
-    $tree heading link_type -text "Link Type"
-    $tree column link_type -width 80 -minwidth 60
+    $tree_frame.list heading link_type -text "Link Type"
+    $tree_frame.list column link_type -width 80 -minwidth 60
 
-    $tree heading link_scope -text "Link Scope"
-    $tree column link_scope -width 80 -minwidth 60
+    $tree_frame.list heading link_scope -text "Link Scope"
+    $tree_frame.list column link_scope -width 80 -minwidth 60
 
-    $tree heading expires -text "Expires"
-    $tree column expires -width 120 -minwidth 100
+    $tree_frame.list heading expires -text "Expires"
+    $tree_frame.list column expires -width 120 -minwidth 100
 
     # Configure tags for different permission types
-    $tree tag configure owner -background lightgreen
-    $tree tag configure write -background lightblue
-    $tree tag configure read -background lightyellow
+    $tree_frame.list tag configure owner -background lightgreen
+    $tree_frame.list tag configure write -background lightblue
+    $tree_frame.list tag configure read -background lightyellow
     
     # Fix Treeview row height to match font (prevents text clipping on Linux HiDPI)
-    set f [ttk::style lookup Treeview -font]
-    if {$f eq ""} { set f TkDefaultFont }
-    set h [expr {[font metrics $f -linespace] + 6}]  ;# a bit of padding
+    set font_name [ttk::style lookup Treeview -font]
+    if {$font_name eq ""} { set font_name TkDefaultFont }
+    set h [expr {[font metrics $font_name -linespace] + 6}]  ;# a bit of padding
     ttk::style configure Treeview -rowheight $h
 }
 
@@ -2054,22 +2049,22 @@ proc show_oauth_modal_dialog {} {
     focus $modal
     
     # Main frame with padding
-    set main_frame [ttk::frame $modal.main -padding 20]
-    pack $main_frame -fill both -expand yes
+    set f [ttk::frame $modal.main -padding 20]
+    pack $f -fill both -expand yes
     
     # Title
-    ttk::label $main_frame.title -text "This operation requires elevated OneDrive permissions" \
+    ttk::label $f.title -text "This operation requires elevated OneDrive permissions" \
         -font {TkDefaultFont 11 bold} -wraplength 510
-    pack $main_frame.title -pady {0 20}
+    pack $f.title -pady {0 20}
     
     # Instructions
-    ttk::label $main_frame.instructions \
+    ttk::label $f.instructions \
         -text "Please choose an authentication method:" \
         -justify left
-    pack $main_frame.instructions -anchor w -pady {0 15}
+    pack $f.instructions -anchor w -pady {0 15}
     
     # Button frame for the two main action buttons
-    set action_frame [ttk::frame $main_frame.actions]
+    set action_frame [ttk::frame $f.actions]
     pack $action_frame -fill x -pady {0 15}
     
     # Browser authentication button
@@ -2085,7 +2080,7 @@ proc show_oauth_modal_dialog {} {
     pack $reload_btn -pady 5 -anchor center
     
     # Status label (shows progress after user clicks a button)
-    set status_label [ttk::label $main_frame.status \
+    set status_label [ttk::label $f.status \
         -text "" \
         -foreground blue -justify center]
     pack $status_label -pady {10 10}
@@ -2327,7 +2322,8 @@ proc ensure_edit_capability {} {
 
 proc on_invite_user_click {} {
     # Show dialog to invite a user
-    global current_item_id remote_entry tree
+    global current_item_id remote_entry f
+    set tree $f.acl.tree.list
     
     if {$current_item_id eq ""} {
         tk_messageBox -type ok -icon warning -title "No Item Selected" \
@@ -2422,7 +2418,8 @@ proc on_invite_user_click {} {
 
 proc on_remove_selected_click {} {
     # Remove selected permissions from treeview
-    global tree current_item_id remote_entry
+    global f current_item_id remote_entry
+    set tree $f.acl.tree.list
     
     if {$current_item_id eq ""} {
         tk_messageBox -type ok -icon warning -title "No Item Selected" \
@@ -3276,7 +3273,7 @@ proc fetch_permissions_by_id {item_id access_token} {
 
 # GUI wrapper: Fetch ACL and update GUI widgets
 proc gui_fetch_acl {item_id remote_name} {
-    global tree current_item_id token_capability action_buttons_frame acl_path_label
+    global f current_item_id token_capability action_buttons_frame acl_path_label
     
     if {$item_id eq ""} {
         gui_update_status "Error: Invalid item ID" red
@@ -3347,12 +3344,10 @@ proc gui_fetch_acl {item_id remote_name} {
     gui_update_status "✅ Found $item_type" green
     
     # Clear existing treeview
-    if {[info exists tree] && $tree ne ""} {
-        foreach item [$tree children {}] {
-            $tree delete $item
-        }
-        gui_update_status "Treeview cleared" green
+    foreach item [$f.acl.tree.list children {}] {
+        $f.acl.tree.list delete $item
     }
+    gui_update_status "Treeview cleared" green
     
     # Get permissions using shared function
     gui_update_status "Getting ACL..." blue
@@ -3379,9 +3374,9 @@ proc gui_fetch_acl {item_id remote_name} {
     $action_buttons_frame.remove configure -state disabled  ;# Will be enabled when user selects items
     
     # Bind treeview selection event to enable/disable Remove button
-    bind $tree <<TreeviewSelect>> {
-        global action_buttons_frame tree
-        set selection [$tree selection]
+    bind $f.acl.tree.list <<TreeviewSelect>> {
+        global action_buttons_frame f
+        set selection [.main.acl.tree.list selection]
         if {[llength $selection] > 0} {
             $action_buttons_frame.remove configure -state normal
         } else {
@@ -3431,7 +3426,7 @@ proc gui_fetch_acl {item_id remote_name} {
         }
         
         # Insert into treeview
-        $tree insert {} end -text "$perm_num" \
+        $f.acl.tree.list insert {} end -text "$perm_num" \
             -values [list $perm_id $roles_str $user_name $user_email $link_type $link_scope $expires] \
             -tags $tag
         
