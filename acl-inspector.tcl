@@ -82,7 +82,7 @@ set action_buttons_frame ""
 # Multi-column browser variables
 set column_list {}        ;# List of column widgets
 set column_data {}        ;# List of column data (each element: {folder_id path items})
-set selected_item {}      ;# Currently selected item {col_index item_index item_data}
+set selected_item {}      ;# Currently selected item {col_index item_index id path is_folder}
 set fetch_button ""       ;# Fetch ACL button widget
 set acl_path_label ""     ;# Label showing path of current ACL display
 
@@ -445,7 +445,6 @@ proc on_column_item_click {col_index widget y_coord} {
         item_index $item_index \
         id $item_id \
         path $item_path \
-        name $item_name \
         is_folder $is_folder]
     
     # Update URL bar
@@ -469,23 +468,23 @@ proc on_column_item_click {col_index widget y_coord} {
 
 proc on_fetch_button_click {} {
     # Fetch ACL for the currently selected item
-    global selected_item acl_path_label
+    global selected_item remote_entry
     
     if {[llength $selected_item] == 0} {
-        update_status "No item selected" red
+        gui_update_status "No item selected" red
         return
     }
     
-    set item_path [dict get $selected_item path]
+    if {![dict exists $selected_item id]} {
+        gui_update_status "Error: Invalid item selection" red
+        return
+    }
     
-    # Update ACL path label
-    $acl_path_label configure -state normal
-    $acl_path_label delete 0 end
-    $acl_path_label insert 0 $item_path
-    $acl_path_label configure -state readonly
+    set item_id [dict get $selected_item id]
+    set remote_name [$remote_entry get]
     
-    # Fetch ACL
-    fetch_acl $item_path
+    # Fetch ACL using ID directly (no lookup needed)
+    gui_fetch_acl $item_id $remote_name
 }
 
 # ============================================================================
@@ -565,23 +564,18 @@ proc get_item_url_from_path {path} {
 # Core Functions
 # ============================================================================
 
+# Shared update_status - logs to console for both modes
+# GUI code should use update_status, CLI code should use puts directly
 proc update_status {message {color blue}} {
-    global status_label gui_mode
     # Always log to console for debugging
     puts "STATUS ($color): $message"
-    if {$gui_mode} {
-        $status_label configure -text $message -foreground $color
-    }
 }
 
+# Shared clear_treeview placeholder - GUI code should use gui_clear_treeview
+# This exists for compatibility with shared code that may call it
 proc clear_treeview {} {
-    global tree gui_mode
-    if {$gui_mode} {
-        foreach item [$tree children {}] {
-            $tree delete $item
-        }
-        update_status "Treeview cleared" green
-    }
+    # GUI code should use gui_clear_treeview instead
+    # CLI code doesn't have a treeview, so this does nothing
 }
 
 proc display_acl_cli {permissions item_id} {
@@ -1017,8 +1011,8 @@ proc get_access_token {{rclone_remote ""}} {
     set conf_path [get_rclone_conf_path]
     
     if {![file exists $conf_path]} {
-        update_status "Error: rclone config not found at $conf_path" red
-        update_status "Please configure rclone first: rclone config" red
+        gui_update_status "Error: rclone config not found at $conf_path" red
+        gui_update_status "Please configure rclone first: rclone config" red
         return ""
     }
     
@@ -1027,21 +1021,21 @@ proc get_access_token {{rclone_remote ""}} {
         set onedrive_remotes [find_onedrive_remotes]
         
         if {[llength $onedrive_remotes] == 0} {
-            update_status "Error: No OneDrive remotes found in rclone configuration" red
-            update_status "Please configure OneDrive first: rclone config" red
+            gui_update_status "Error: No OneDrive remotes found in rclone configuration" red
+            gui_update_status "Please configure OneDrive first: rclone config" red
             return ""
         }
         
         if {[llength $onedrive_remotes] == 1} {
             set rclone_remote [lindex $onedrive_remotes 0]
-            update_status "No remote name given, using first OneDrive remote: $rclone_remote" blue
+            gui_update_status "No remote name given, using first OneDrive remote: $rclone_remote" blue
         } else {
-            update_status "No remote name given, found [llength $onedrive_remotes] OneDrive remotes:" blue
+            gui_update_status "No remote name given, found [llength $onedrive_remotes] OneDrive remotes:" blue
             for {set i 0} {$i < [llength $onedrive_remotes]} {incr i} {
-                update_status "  [expr {$i + 1}]. [lindex $onedrive_remotes $i]" blue
+                gui_update_status "  [expr {$i + 1}]. [lindex $onedrive_remotes $i]" blue
             }
             set rclone_remote [lindex $onedrive_remotes 0]
-            update_status "Using first OneDrive remote: $rclone_remote" blue
+            gui_update_status "Using first OneDrive remote: $rclone_remote" blue
         }
     }
     
@@ -1089,8 +1083,8 @@ proc get_access_token {{rclone_remote ""}} {
     }
     
     if {$token_json eq ""} {
-        update_status "Error: No token found for remote '$rclone_remote'" red
-        update_status "Please authenticate first: rclone authorize onedrive" red
+        gui_update_status "Error: No token found for remote '$rclone_remote'" red
+        gui_update_status "Please authenticate first: rclone authorize onedrive" red
         return ""
     }
     
@@ -1131,14 +1125,14 @@ proc get_access_token {{rclone_remote ""}} {
                 set current_time [clock seconds]
                 
                 if {$current_time >= $expiry_time} {
-                    update_status "❌ Error: Token has expired!" red
-                    update_status "   Token expired on: [clock format $expiry_time -format "%Y-%m-%d %H:%M:%S UTC"]" red
-                    update_status "   Current time is: [clock format $current_time -format "%Y-%m-%d %H:%M:%S UTC"]" red
-                    update_status "" red
-                    update_status "To fix this, please refresh your rclone token:" red
-                    update_status "   rclone config reconnect $rclone_remote" red
-                    update_status "Or re-authenticate completely:" red
-                    update_status "   rclone config" red
+                    gui_update_status "❌ Error: Token has expired!" red
+                    gui_update_status "   Token expired on: [clock format $expiry_time -format "%Y-%m-%d %H:%M:%S UTC"]" red
+                    gui_update_status "   Current time is: [clock format $current_time -format "%Y-%m-%d %H:%M:%S UTC"]" red
+                    gui_update_status "" red
+                    gui_update_status "To fix this, please refresh your rclone token:" red
+                    gui_update_status "   rclone config reconnect $rclone_remote" red
+                    gui_update_status "Or re-authenticate completely:" red
+                    gui_update_status "   rclone config" red
                     return ""
                 }
             } error_msg]} {
@@ -1150,8 +1144,8 @@ proc get_access_token {{rclone_remote ""}} {
         if {[dict exists $token_dict access_token]} {
             set access_token [dict get $token_dict access_token]
             if {$access_token eq ""} {
-                update_status "Error: No access_token in token JSON" red
-                update_status "Token may be expired. Please re-authenticate: rclone authorize onedrive" red
+                gui_update_status "Error: No access_token in token JSON" red
+                gui_update_status "Token may be expired. Please re-authenticate: rclone authorize onedrive" red
             } else {
                 # Sanitize access token: remove quotes, trim whitespace, remove CR/LF
                 set access_token [string trim $access_token]
@@ -1160,16 +1154,16 @@ proc get_access_token {{rclone_remote ""}} {
                 set access_token [string trim $access_token]
                 
                 
-                update_status "✅ Successfully extracted access token from rclone.conf" green
+                gui_update_status "✅ Successfully extracted access token from rclone.conf" green
             }
         } else {
             debug_log "ERROR: No access_token key in token_dict. Available keys: [dict keys $token_dict]"
-            update_status "Error: No access_token in token JSON" red
-            update_status "Token may be expired. Please re-authenticate: rclone authorize onedrive" red
+            gui_update_status "Error: No access_token in token JSON" red
+            gui_update_status "Token may be expired. Please re-authenticate: rclone authorize onedrive" red
         }
     } else {
         debug_log "ERROR: Failed to parse token JSON. Error: $token_dict"
-        update_status "Error: Could not parse token JSON: $token_dict" red
+        gui_update_status "Error: Could not parse token JSON: $token_dict" red
     }
     
     return $access_token
@@ -1376,7 +1370,7 @@ proc get_access_token_with_capability {rclone_remote {require_capability ""}} {
                     
                     if {[dict exists $token_data refresh_token]} {
                         debug_log "Attempting automatic token refresh..."
-                        update_status "Token expired, refreshing..." blue
+                        gui_update_status "Token expired, refreshing..." blue
                         
                         set new_token_data [refresh_access_token $token_data]
                         
@@ -1392,17 +1386,17 @@ proc get_access_token_with_capability {rclone_remote {require_capability ""}} {
                             }
                             
                             debug_log "✓ Token refresh successful! New capability: $capability"
-                            update_status "✓ Token refreshed successfully (capability: $capability)" green
+                            gui_update_status "✓ Token refreshed successfully (capability: $capability)" green
                             
                             return [list $access_token $capability $expires_at]
                         } else {
                             # Refresh failed
                             debug_log "Token refresh failed, falling back to rclone.conf"
-                            update_status "Token refresh failed, falling back to rclone token..." orange
+                            gui_update_status "Token refresh failed, falling back to rclone token..." orange
                         }
                     } else {
                         debug_log "No refresh_token available, falling back to rclone.conf"
-                        update_status "Token expired (no refresh token), falling back to rclone token..." orange
+                        gui_update_status "Token expired (no refresh token), falling back to rclone token..." orange
                     }
                 } else {
                     # Cannot determine expiration (-1)
@@ -1427,14 +1421,14 @@ proc get_access_token_with_capability {rclone_remote {require_capability ""}} {
     # Fallback to rclone.conf (assume read-only)
     if {$require_capability eq "full"} {
         debug_log "Full capability required but only rclone token available"
-        update_status "❌ Operation requires full permissions. Please re-authenticate." red
+        gui_update_status "❌ Operation requires full permissions. Please re-authenticate." red
         return [list "" "insufficient" "n/a"]
     }
     
     set access_token [get_access_token $rclone_remote]
     if {$access_token ne ""} {
         debug_log "Using rclone.conf token (read-only mode)"
-        update_status "Using rclone.conf token (read-only)" blue
+        gui_update_status "Using rclone.conf token (read-only)" blue
         return [list $access_token "read-only" "unknown"]
     }
     
@@ -1526,7 +1520,7 @@ proc oauth_start_local_server {} {
             append errorMsg "\n2. Wait a moment and try again"
             append errorMsg "\n3. Or run: lsof -i :53682 (to see what's using the port)"
         }
-        update_status "Error starting OAuth server: $error" red
+        gui_update_status "Error starting OAuth server: $error" red
         debug_log $errorMsg
         return ""
     }
@@ -1718,16 +1712,16 @@ proc acquire_elevated_token {} {
     # User chooses: browser auth OR reload token file
     global oauth gui_mode
     
-    update_status "Elevated permissions required - please choose authentication method..." blue
+    gui_update_status "Elevated permissions required - please choose authentication method..." blue
     
     # Show modal dialog with two action buttons
     # Dialog handles everything: OAuth server, browser launch, token reload, etc.
     set success [show_oauth_modal_dialog]
     
     if {$success} {
-        update_status "✅ Authentication successful!" green
+        gui_update_status "✅ Authentication successful!" green
     } else {
-        update_status "Authentication cancelled or failed" orange
+        gui_update_status "Authentication cancelled or failed" orange
         cleanup_oauth_server
     }
     
@@ -2346,24 +2340,24 @@ proc on_invite_user_click {} {
         # capability is 2nd element, expires_at is 3rd (not needed here)
         
         if {$access_token eq ""} {
-            update_status "Error: No access token available" red
+            gui_update_status "Error: No access token available" red
             return
         }
         
         # Invite user
-        update_status "Inviting $email..." blue
+        gui_update_status "Inviting $email..." blue
         set invite_result [invite_user_to_item $current_item_id $email $role $access_token]
         set invite_status [lindex $invite_result 0]
         set invite_message [lindex $invite_result 1]
         
         if {$invite_status eq "ok"} {
-            update_status "✅ $invite_message" green
+            gui_update_status "✅ $invite_message" green
             # Refresh ACL display
             after 1000 {refresh_current_acl}
         } elseif {$invite_status eq "error" && [string match "*401*" $invite_message]} {
-            update_status "Token expired - please try again" red
+            gui_update_status "Token expired - please try again" red
         } else {
-            update_status "❌ $invite_message" red
+            gui_update_status "❌ $invite_message" red
         }
     } else {
         destroy $dialog
@@ -2409,7 +2403,7 @@ proc on_remove_selected_click {} {
     # capability is 2nd element, expires_at is 3rd (not needed here)
     
     if {$access_token eq ""} {
-        update_status "Error: No access token available" red
+        gui_update_status "Error: No access token available" red
         return
     }
     
@@ -2417,7 +2411,7 @@ proc on_remove_selected_click {} {
     set success_count 0
     set fail_count 0
     
-    update_status "Removing $count permission(s)..." blue
+    gui_update_status "Removing $count permission(s)..." blue
     
     foreach item $selection {
         set values [$tree item $item -values]
@@ -2432,16 +2426,16 @@ proc on_remove_selected_click {} {
             incr fail_count
             set error_msg [lindex $remove_result 1]
             if {[string match "*401*" $error_msg]} {
-                update_status "Token expired - please try again" red
+                gui_update_status "Token expired - please try again" red
                 return
             }
         }
     }
     
     if {$fail_count == 0} {
-        update_status "✅ Removed $success_count permission(s)" green
+        gui_update_status "✅ Removed $success_count permission(s)" green
     } else {
-        update_status "⚠️ Removed $success_count, failed $fail_count" orange
+        gui_update_status "⚠️ Removed $success_count, failed $fail_count" orange
     }
     
     # Refresh ACL display
@@ -2450,11 +2444,12 @@ proc on_remove_selected_click {} {
 
 proc refresh_current_acl {} {
     # Refresh the current ACL display
-    global selected_item
+    global selected_item remote_entry
     
-    if {[dict exists $selected_item path]} {
-        set item_path [dict get $selected_item path]
-        fetch_acl $item_path
+    if {[dict exists $selected_item id]} {
+        set item_id [dict get $selected_item id]
+        set remote_name [$remote_entry get]
+        gui_fetch_acl $item_id $remote_name
     }
 }
 
@@ -2646,23 +2641,9 @@ proc add_shared_folder_result {folder_id folder_path access_token has_link has_d
         set share_type "Direct permissions"
     }
     
-    # Get the folder ID by path to ensure consistency
+    # Use folder_id directly - no consistency check needed
+    # The folder_id comes from the API, so it's already correct
     set consistent_folder_id $folder_id
-    if {$folder_path ne ""} {
-        if {[catch {
-            set path_url [get_item_url_from_path $folder_path]
-            set path_result [make_http_request $path_url $headers]
-            set path_status [lindex $path_result 0]
-            set path_data [lindex $path_result 1]
-            if {$path_status eq "200"} {
-                set path_dict [json::json2dict $path_data]
-                set consistent_folder_id [dict get $path_dict id]
-            }
-        } error]} {
-            # Fall back to original folder_id if path lookup fails
-            set consistent_folder_id $folder_id
-        }
-    }
     
     lappend shared [list \
         path $folder_path \
@@ -2879,10 +2860,11 @@ proc cli_get_full_token {remote_name} {
     return $access_token
 }
 
-proc cli_get_item_from_path {path access_token} {
-    # Helper function to get item ID and dict from path
+proc cli_path_to_item_id_and_dict {path access_token} {
+    # Consolidated CLI lookup function - gets item ID and dict from path
     # Returns: {item_id item_dict} on success, empty list on failure
     # Handles all error messaging internally
+    # THIS FUNCTION ONLY EXISTS IN CLI MODE - CANNOT BE CALLED FROM GUI
     
     set item_url [get_item_url_from_path $path]
     set headers [list Authorization "Bearer $access_token"]
@@ -2929,11 +2911,12 @@ proc remove_user_permissions_cli {path user_email max_depth item_type dry_run re
     # Collect items with user permissions
     if {$max_depth == 0} {
         # Non-recursive: just check this single path
-        set item_id [get_item_id_from_path $path $access_token]
-        if {$item_id eq ""} {
+        set item_result [cli_path_to_item_id_and_dict $path $access_token]
+        if {[llength $item_result] == 0} {
             puts "❌ Failed to get item ID for path: $path"
             return
         }
+        lassign $item_result item_id item_dict
         
         lassign [get_folder_permissions $item_id $access_token] perm_status permissions
         if {$perm_status eq "ok"} {
@@ -2959,7 +2942,7 @@ proc remove_user_permissions_cli {path user_email max_depth item_type dry_run re
         set folders_per_level(0) 0
         
         # Get starting item ID
-        set item_result [cli_get_item_from_path $path $access_token]
+        set item_result [cli_path_to_item_id_and_dict $path $access_token]
         if {[llength $item_result] == 0} {
             return
         }
@@ -3051,22 +3034,6 @@ proc remove_user_permissions_cli {path user_email max_depth item_type dry_run re
     }
 }
 
-proc get_item_id_from_path {path access_token} {
-    # Helper function to get item ID from path
-    set item_url [get_item_url_from_path $path]
-    
-    set headers [list Authorization "Bearer $access_token"]
-    set result [make_http_request $item_url $headers]
-    set status [lindex $result 0]
-    set data [lindex $result 1]
-    
-    if {$status eq "200"} {
-        set item_dict [json::json2dict $data]
-        return [dict get $item_dict id]
-    }
-    
-    return ""
-}
 
 proc invite_user_cli {path user_email read_only remote_name} {
     # CLI wrapper for inviting user to a path
@@ -3082,7 +3049,7 @@ proc invite_user_cli {path user_email read_only remote_name} {
     }
     
     # Get item ID from path
-    set item_result [cli_get_item_from_path $path $access_token]
+    set item_result [cli_path_to_item_id_and_dict $path $access_token]
     if {[llength $item_result] == 0} {
         return
     }
@@ -3125,7 +3092,7 @@ proc list_user_access {path user_email max_depth item_type remote_name} {
         puts "✅ Successfully extracted access token from rclone.conf"
         
         # Get item ID from path
-        set item_result [cli_get_item_from_path $path $access_token]
+        set item_result [cli_path_to_item_id_and_dict $path $access_token]
         if {[llength $item_result] == 0} {
             return
         }
@@ -3201,7 +3168,7 @@ proc scan_shared_folders_user_impl {path user_email max_depth item_type remote_n
     if {[catch {
         if {$path ne "/" && $path ne ""} {
             # Get the target directory by path
-            set item_result [cli_get_item_from_path $path $access_token]
+            set item_result [cli_path_to_item_id_and_dict $path $access_token]
             if {[llength $item_result] > 0} {
                 lassign $item_result target_id target_data
                 
@@ -3213,7 +3180,7 @@ proc scan_shared_folders_user_impl {path user_email max_depth item_type remote_n
             }
         } else {
             # Start from root
-            set item_result [cli_get_item_from_path "/" $access_token]
+            set item_result [cli_path_to_item_id_and_dict "/" $access_token]
             if {[llength $item_result] > 0} {
                 lassign $item_result root_id root_data
                 
@@ -3289,22 +3256,41 @@ proc scan_shared_folders_user_impl {path user_email max_depth item_type remote_n
     puts "\n=== Scan Complete ==="
 }
 
-proc fetch_acl {{item_path ""} {remote_name "OneDrive"} {target_dir ""}} {
-    global remote_entry tree gui_mode current_folder_path current_item_id token_capability action_buttons_frame
+# Shared function: Fetch permissions by item ID (used by both GUI and CLI)
+# Returns: {status permissions} where status is "ok" or error message
+proc fetch_permissions_by_id {item_id access_token} {
+    # Get permissions from Microsoft Graph API
+    set permissions_url [build_graph_api_url "/me/drive/items/$item_id/permissions"]
     
-    if {$gui_mode} {
-        set remote_name [$remote_entry get]
+    set result [make_http_request $permissions_url [list Authorization "Bearer $access_token"]]
+    set status [lindex $result 0]
+    set data [lindex $result 1]
+    
+    if {$status ne "200"} {
+        if {$status eq "403"} {
+            return [list "error" "Access denied - you may not have permission to view ACL for this item"]
+        } else {
+            return [list "error" "Failed to get ACL: $status"]
+        }
     }
     
-    if {$item_path eq ""} {
-        update_status "Error: Please select an item to fetch ACL" red
+    # Parse permissions response
+    if {[catch {json::json2dict $data} permissions_dict]} {
+        return [list "error" "Failed to parse permissions response: $permissions_dict"]
+    }
+    
+    set permissions [dict get $permissions_dict value]
+    return [list "ok" $permissions]
+}
+
+# GUI wrapper: Fetch ACL and update GUI widgets
+proc gui_fetch_acl {item_id remote_name} {
+    global tree current_item_id token_capability action_buttons_frame acl_path_label
+    
+    if {$item_id eq ""} {
+        gui_update_status "Error: Invalid item ID" red
         return
     }
-    
-    update_status "Fetching ACL for: $item_path" blue
-    
-    # Clear existing treeview
-    clear_treeview
     
     # Get access token with capability detection
     set result [get_access_token_with_capability $remote_name]
@@ -3326,17 +3312,11 @@ proc fetch_acl {{item_path ""} {remote_name "OneDrive"} {target_dir ""}} {
         set exp_display ""
     }
     
-    update_status "✅ Using token (capability: $capability)$exp_display" green
+    gui_update_status "✅ Using token (capability: $capability)$exp_display" green
     
-    # Construct the full path if target_dir is specified
-    set full_path $item_path
-    if {$target_dir ne ""} {
-        set full_path "$target_dir/$item_path"
-    }
-    
-    # Get item info - URL encode the path properly for all Unicode characters
-    set item_url [get_item_url_from_path $full_path]
-    update_status "Getting item info from: $item_url" blue
+    # Get item info by ID (no lookup needed - we already have ID)
+    set item_url [build_graph_api_url "/me/drive/items/$item_id"]
+    gui_update_status "Getting item info for ID: $item_id" blue
     
     set result [make_http_request $item_url [list Authorization "Bearer $access_token"]]
     set status [lindex $result 0]
@@ -3345,139 +3325,236 @@ proc fetch_acl {{item_path ""} {remote_name "OneDrive"} {target_dir ""}} {
     if {$status ne "200"} {
         # Handle 401 errors specially - token might have expired
         if {$status eq "401" && $capability eq "full" && [string match "*TOKEN_EXPIRED*" $data]} {
-            update_status "❌ Token expired despite refresh attempt. Please re-authenticate." red
+            gui_update_status "❌ Token expired despite refresh attempt. Please re-authenticate." red
             return
         } elseif {$status eq "error"} {
-            update_status "❌ HTTP request failed: $data" red
+            gui_update_status "❌ HTTP request failed: $data" red
         } else {
-            update_status "❌ Failed to get item info: $status - $data" red
+            gui_update_status "❌ Failed to get item info: $status - $data" red
         }
         return
     }
     
     # Parse item response
     if {[catch {json::json2dict $data} item_dict]} {
-        update_status "❌ Failed to parse item response: $item_dict" red
+        gui_update_status "❌ Failed to parse item response: $item_dict" red
         return
     }
     
-    set item_id [dict get $item_dict id]
     set item_name [dict get $item_dict name]
     set item_type [expr {[dict exists $item_dict folder] ? "folder" : "file"}]
+    set item_path [get_item_path $item_id $access_token]
     
     # Store current item ID for edit operations
     set current_item_id $item_id
     
-    update_status "✅ Found $item_type: $item_name (ID: $item_id)" green
+    # Update ACL path label
+    $acl_path_label configure -state normal
+    $acl_path_label delete 0 end
+    $acl_path_label insert 0 $item_path
+    $acl_path_label configure -state readonly
     
-    # Get permissions
-    set permissions_url [build_graph_api_url "/me/drive/items/$item_id/permissions"]
-    update_status "Getting ACL from: $permissions_url" blue
+    gui_update_status "✅ Found $item_type: $item_name (ID: $item_id)" green
     
-    set result [make_http_request $permissions_url [list Authorization "Bearer $access_token"]]
-    set status [lindex $result 0]
-    set data [lindex $result 1]
+    # Clear existing treeview
+    gui_clear_treeview
     
-    if {$status ne "200"} {
-        if {$status eq "403"} {
-            update_status "❌ Access denied - you may not have permission to view ACL for this item" red
-        } else {
-            update_status "❌ Failed to get ACL: $status" red
-        }
+    # Get permissions using shared function
+    gui_update_status "Getting ACL..." blue
+    set perm_result [fetch_permissions_by_id $item_id $access_token]
+    set perm_status [lindex $perm_result 0]
+    set permissions [lindex $perm_result 1]
+    
+    if {$perm_status ne "ok"} {
+        gui_update_status "❌ $permissions" red
         return
     }
     
-    # Parse permissions response
-    if {[catch {json::json2dict $data} permissions_dict]} {
-        update_status "❌ Failed to parse permissions response: $permissions_dict" red
-        return
-    }
-    
-    set permissions [dict get $permissions_dict value]
     set perm_count [llength $permissions]
     
     if {$perm_count == 0} {
-        update_status "ℹ️ No permissions found for this item (empty ACL)" orange
+        gui_update_status "ℹ️ No permissions found for this item (empty ACL)" orange
         return
     }
     
-    update_status "✅ Found $perm_count permission(s) in ACL (Token: $capability)" green
+    gui_update_status "✅ Found $perm_count permission(s) in ACL (Token: $capability)" green
     
-    if {$gui_mode} {
-        # Enable action buttons now that we have an item selected
-        $action_buttons_frame.invite configure -state normal
-        $action_buttons_frame.remove configure -state disabled  ;# Will be enabled when user selects items
-        
-        # Bind treeview selection event to enable/disable Remove button
-        bind $tree <<TreeviewSelect>> {
-            global action_buttons_frame tree
-            set selection [$tree selection]
-            if {[llength $selection] > 0} {
-                $action_buttons_frame.remove configure -state normal
-            } else {
-                $action_buttons_frame.remove configure -state disabled
-            }
+    # Enable action buttons now that we have an item selected
+    $action_buttons_frame.invite configure -state normal
+    $action_buttons_frame.remove configure -state disabled  ;# Will be enabled when user selects items
+    
+    # Bind treeview selection event to enable/disable Remove button
+    bind $tree <<TreeviewSelect>> {
+        global action_buttons_frame tree
+        set selection [$tree selection]
+        if {[llength $selection] > 0} {
+            $action_buttons_frame.remove configure -state normal
+        } else {
+            $action_buttons_frame.remove configure -state disabled
         }
-        
-        # Populate treeview (filter out owner permissions)
-        set perm_num 1
-        foreach perm $permissions {
-            set roles [dict get $perm roles]
-            
-            # Skip owner permissions - they can't be removed and OneDrive doesn't show them
-            if {[lsearch $roles "owner"] >= 0} {
-                continue
-            }
-            
-            set perm_id [dict get $perm id]
-            set roles_str [join $roles ", "]
-            
-            # Get user information
-            lassign [extract_user_info $perm] user_name user_email
-            
-            # Get link information
-            set link_type "N/A"
-            set link_scope "N/A"
-            if {[dict exists $perm link]} {
-                set link [dict get $perm link]
-                if {[dict exists $link type]} {
-                    set link_type [dict get $link type]
-                }
-                if {[dict exists $link scope]} {
-                    set link_scope [dict get $link scope]
-                }
-            }
-            
-            # Get expiration
-            set expires "N/A"
-            if {[dict exists $perm expirationDateTime]} {
-                set expires [dict get $perm expirationDateTime]
-            }
-            
-            # Determine tag based on roles
-            set tag "write"
-            if {[lsearch $roles "read"] >= 0} {
-                set tag "read"
-            }
-            
-            # Insert into treeview
-            $tree insert {} end -text "$perm_num" \
-                -values [list $perm_id $roles_str $user_name $user_email $link_type $link_scope $expires] \
-                -tags $tag
-            
-            incr perm_num
-        }
-    } else {
-        # Display in CLI mode
-        display_acl_cli $permissions $item_id
     }
     
-    update_status "✅ ACL listing of: https://onedrive.live.com/?id=$item_id" green
+    # Populate treeview (filter out owner permissions)
+    set perm_num 1
+    foreach perm $permissions {
+        set roles [dict get $perm roles]
+        
+        # Skip owner permissions - they can't be removed and OneDrive doesn't show them
+        if {[lsearch $roles "owner"] >= 0} {
+            continue
+        }
+        
+        set perm_id [dict get $perm id]
+        set roles_str [join $roles ", "]
+        
+        # Get user information
+        lassign [extract_user_info $perm] user_name user_email
+        
+        # Get link information
+        set link_type "N/A"
+        set link_scope "N/A"
+        if {[dict exists $perm link]} {
+            set link [dict get $perm link]
+            if {[dict exists $link type]} {
+                set link_type [dict get $link type]
+            }
+            if {[dict exists $link scope]} {
+                set link_scope [dict get $link scope]
+            }
+        }
+        
+        # Get expiration
+        set expires "N/A"
+        if {[dict exists $perm expirationDateTime]} {
+            set expires [dict get $perm expirationDateTime]
+        }
+        
+        # Determine tag based on roles
+        set tag "write"
+        if {[lsearch $roles "read"] >= 0} {
+            set tag "read"
+        }
+        
+        # Insert into treeview
+        $tree insert {} end -text "$perm_num" \
+            -values [list $perm_id $roles_str $user_name $user_email $link_type $link_scope $expires] \
+            -tags $tag
+        
+        incr perm_num
+    }
+    
+    gui_update_status "✅ ACL listing of: https://onedrive.live.com/?id=$item_id" green
 }
 
+# CLI version of fetch_acl - takes item_path, does lookup
+proc cli_fetch_acl {item_path remote_name {target_dir ""}} {
+    if {$item_path eq ""} {
+        puts "❌ Error: Please specify an item path"
+        return
+    }
+    
+    puts "Fetching ACL for: $item_path"
+    
+    # Get access token with capability detection
+    set result [get_access_token_with_capability $remote_name]
+    set access_token [lindex $result 0]
+    set capability [lindex $result 1]
+    set expires_at [lindex $result 2]
+    
+    if {$access_token eq ""} {
+        return
+    }
+    
+    debug_log "Token capability: $capability"
+    
+    # Format expiration info
+    if {$expires_at ne "unknown" && $expires_at ne "n/a"} {
+        set exp_display " (expires: $expires_at)"
+    } else {
+        set exp_display ""
+    }
+    
+    puts "✅ Using token (capability: $capability)$exp_display"
+    
+    # Construct the full path if target_dir is specified
+    set full_path $item_path
+    if {$target_dir ne ""} {
+        set full_path "$target_dir/$item_path"
+    }
+    
+    # Get item ID from path (LOOKUP - this is why CLI needs path)
+    set item_result [cli_path_to_item_id_and_dict $full_path $access_token]
+    if {[llength $item_result] == 0} {
+        puts "❌ Failed to get item ID for path: $full_path"
+        return
+    }
+    lassign $item_result item_id item_dict
+    
+    set item_name [dict get $item_dict name]
+    set item_type [expr {[dict exists $item_dict folder] ? "folder" : "file"}]
+    
+    puts "✅ Found $item_type: $item_name (ID: $item_id)"
+    
+    # Get permissions using shared function
+    puts "Getting ACL..."
+    set perm_result [fetch_permissions_by_id $item_id $access_token]
+    set perm_status [lindex $perm_result 0]
+    set permissions [lindex $perm_result 1]
+    
+    if {$perm_status ne "ok"} {
+        puts "❌ $permissions"
+        return
+    }
+    
+    set perm_count [llength $permissions]
+    
+    if {$perm_count == 0} {
+        puts "ℹ️ No permissions found for this item (empty ACL)"
+        return
+    }
+    
+    puts "✅ Found $perm_count permission(s) in ACL (Token: $capability)"
+    
+    # Display in CLI mode
+    display_acl_cli $permissions $item_id
+    
+    puts "✅ ACL listing of: https://onedrive.live.com/?id=$item_id"
+}
+
+
 if {$gui_mode} {
+    # ========================================================================
+    # GUI MODE FUNCTIONS
+    # ========================================================================
+    
+    # GUI-specific status and treeview functions
+    proc gui_update_status {message color} {
+        global status_label
+        puts "STATUS ($color): $message"  ;# Still log to console for debugging
+        if {[info exists status_label] && $status_label ne ""} {
+            $status_label configure -text $message -foreground $color
+        }
+    }
+    
+    proc gui_clear_treeview {} {
+        global tree
+        if {[info exists tree] && $tree ne ""} {
+            foreach item [$tree children {}] {
+                $tree delete $item
+            }
+            gui_update_status "Treeview cleared" green
+        }
+    }
+    
+    # Update gui_fetch_acl to use GUI-specific functions
+    # (We'll replace all update_status/clear_treeview calls)
+    
+    # ========================================================================
+    # GUI INITIALIZATION
+    # ========================================================================
+    
     # GUI mode - Initialize browser with root folder
-    update_status "OneDrive ACL Lister - Ready to browse and fetch ACL information" blue
+    gui_update_status "OneDrive ACL Lister - Ready to browse and fetch ACL information" blue
     
     # Populate first column with root folder
     populate_column 0 "root" ""
