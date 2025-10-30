@@ -26,9 +26,7 @@
 #    tclsh acl_demo.tcl "Documents/Project" "MyOneDrive"
 
 # Check if we're running in GUI mode (wish) or CLI mode (tclsh)
-set gui_mode [expr {[info commands tk] ne ""}]
-
-if {$gui_mode} {
+if {[info commands tk] ne ""} {
     package require Tk
     package require Ttk
 }
@@ -86,7 +84,7 @@ set selected_item {}      ;# Currently selected item {col_index item_index id pa
 set fetch_button ""       ;# Fetch ACL button widget
 set acl_path_label ""     ;# Label showing path of current ACL display
 
-if {$gui_mode} {
+if {[info commands tk] ne ""} {
     # Declare global widget variables
     global remote_entry url_entry fetch_button acl_path_label column_list column_data selected_item action_buttons_frame
     
@@ -1710,7 +1708,7 @@ proc oauth_exchange_token {code} {
 proc acquire_elevated_token {} {
     # Show modal dialog with authentication options
     # User chooses: browser auth OR reload token file
-    global oauth gui_mode
+    global oauth
     
     gui_update_status "Elevated permissions required - please choose authentication method..." blue
     
@@ -3522,7 +3520,7 @@ proc cli_fetch_acl {item_path remote_name {target_dir ""}} {
 }
 
 
-if {$gui_mode} {
+if {[info commands tk] ne ""} {
     # ========================================================================
     # GUI MODE FUNCTIONS
     # ========================================================================
