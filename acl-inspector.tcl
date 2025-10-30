@@ -3280,7 +3280,7 @@ proc gui_fetch_acl {item_id remote_name} {
     $acl_path_label insert 0 $item_name
     $acl_path_label configure -state readonly
     
-    gui_update_status "✅ Found $item_type: $item_name (ID: $item_id)" green
+    gui_update_status "✅ Found $item_type" green
     
     # Clear existing treeview
     gui_clear_treeview
