@@ -58,6 +58,8 @@ tclsh acl-inspector.tcl [OPTIONS] [PATH]
 
 **PATH**: Folder or file to inspect (default: `/` - root) - must come after all options
 
+**Note**: Options accept both single dash (`-option`) and double dash (`--option`) syntax. Help output shows single dashes but both work.
+
 **Core Options:**
 - `-r, --recursive` - **Scan folder and all subfolders** (default max-depth: 3) - Use this for complete access audits
 - `--max-depth N` - Control recursion depth (use with `-r`, or set explicitly for any depth)
@@ -73,6 +75,7 @@ tclsh acl-inspector.tcl [OPTIONS] [PATH]
 - `--read-only` - Grant read-only instead of read/write (with `--invite`)
 - `--debug` - Enable debug output
 - `--remote REMOTE` - OneDrive remote name (default: `OneDrive`)
+- `--help` - Display help message
 
 ### Examples
 

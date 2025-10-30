@@ -3438,32 +3438,6 @@ proc gui_fetch_acl {item_id remote_name} {
 
 
 # Show help function
-proc show_usage {} {
-    puts "Usage: tclsh acl-inspector.tcl \[OPTIONS\] \[PATH\]"
-    puts ""
-    puts "PATH: Item to inspect (default: /) - must come after all options"
-    puts ""
-    puts "Options:"
-    puts "  --only-user USER       Filter to items USER has access to"
-    puts "  --remove-user USER     Remove USER's access (destructive)"
-    puts "  --invite USER          Invite USER with read/write access (inherited by children)"
-    puts "  -r, --recursive        Include children in scan"
-    puts "  --max-depth N          Max depth (default: 3, requires -r or explicit setting)"
-    puts "  --type TYPE            folders|files|both (default: folders)"
-    puts "  --dry-run              Preview changes (with --remove-user)"
-    puts "  --read-only            Grant read-only access (with --invite, default: read/write)"
-    puts "  --debug                Enable debug output"
-    puts "  --remote REMOTE        OneDrive remote (default: OneDrive)"
-    puts ""
-    puts "Examples:"
-    puts "  tclsh acl-inspector.tcl \"Work\""
-    puts "  tclsh acl-inspector.tcl --only-user bob@example.com -r \"Work\""
-    puts "  tclsh acl-inspector.tcl --invite alice@example.com \"Projects\""
-    puts "  tclsh acl-inspector.tcl --invite bob@example.com --read-only \"Projects\""
-    puts "  tclsh acl-inspector.tcl --remove-user ex@example.com -r --dry-run \"Projects\""
-    puts "  tclsh acl-inspector.tcl --only-user bob@example.com -r --type both"
-    exit 1
-}
 
 proc main {argc argv} {
     # CLI mode - process command line arguments with path-first interface
@@ -3486,9 +3460,8 @@ proc main {argc argv} {
     
     # Parse arguments (cmdline modifies argv in-place, leaving positional args)
     if {[catch {array set params [::cmdline::getoptions argv $options]} err]} {
-        puts "Error: $err"
-        puts ""
-        show_usage
+        puts stderr $err
+        exit 1
     }
     
     # Extract PATH (first remaining positional argument after cmdline processing)
