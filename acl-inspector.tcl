@@ -969,50 +969,144 @@ proc display_recursive_acl {root_path root_permissions all_folders max_depth} {
     }
 }
 
-proc get_access_token {rclone_remote} {
+proc find_onedrive_remotes {} {
+    # Find all OneDrive remotes in rclone configuration
+    set conf_path [file join ~ .config rclone rclone.conf]
+    if {![file exists $conf_path]} {
+        return {}
+    }
+    
+    set onedrive_remotes {}
+    set config_data [read [open $conf_path r]]
+    
+    foreach line [split $config_data \n] {
+        set line [string trim $line]
+        if {[string match "\\\[*\\\]" $line]} {
+            set section_name [string range $line 1 end-1]
+            # Check if this is a OneDrive type remote
+            if {[string match "*onedrive*" [string tolower $section_name]] || 
+                [string match "*sharepoint*" [string tolower $section_name]]} {
+                lappend onedrive_remotes $section_name
+            }
+        }
+    }
+    
+    return $onedrive_remotes
+}
+
+proc get_access_token {{rclone_remote ""}} {
     set conf_path [file join ~ .config rclone rclone.conf]
     
     if {![file exists $conf_path]} {
         update_status "Error: rclone config not found at $conf_path" red
+        update_status "Please configure rclone first: rclone config" red
         return ""
+    }
+    
+    # If no remote specified, find OneDrive remotes and use the first one
+    if {$rclone_remote eq ""} {
+        set onedrive_remotes [find_onedrive_remotes]
+        
+        if {[llength $onedrive_remotes] == 0} {
+            update_status "Error: No OneDrive remotes found in rclone configuration" red
+            update_status "Please configure OneDrive first: rclone config" red
+            return ""
+        }
+        
+        if {[llength $onedrive_remotes] == 1} {
+            set rclone_remote [lindex $onedrive_remotes 0]
+            update_status "No remote name given, using first OneDrive remote: $rclone_remote" blue
+        } else {
+            update_status "No remote name given, found [llength $onedrive_remotes] OneDrive remotes:" blue
+            for {set i 0} {$i < [llength $onedrive_remotes]} {incr i} {
+                update_status "  [expr {$i + 1}]. [lindex $onedrive_remotes $i]" blue
+            }
+            set rclone_remote [lindex $onedrive_remotes 0]
+            update_status "Using first OneDrive remote: $rclone_remote" blue
+        }
     }
     
     # Read config file
     set config_data [read [open $conf_path r]]
     
-    # Find the remote section
-    set remote_section ""
+    # Parse INI file format properly
     set in_remote_section 0
+    set token_json ""
+    set remote_type ""
     
     foreach line [split $config_data \n] {
-        if {[string match "\\\[$rclone_remote\\\]" [string trim $line]]} {
-            set in_remote_section 1
-            continue
+        set line [string trim $line]
+        
+        # Check for section header
+        if {[string match "\\\[*\\\]" $line]} {
+            set section_name [string range $line 1 end-1]
+            if {$section_name eq $rclone_remote} {
+                set in_remote_section 1
+                continue
+            } else {
+                set in_remote_section 0
+                continue
+            }
         }
         
+        # Process lines within the target section
         if {$in_remote_section} {
-            if {[string match "\\\[*\\\]" [string trim $line]]} {
-                break
-            }
-            if {[string match "token*" [string trim $line]]} {
-                set token_line [string trim $line]
-                set token_json [string range $token_line 6 end]
-                break
+            if {[string match "type*" $line]} {
+                set remote_type [string range $line 5 end]
+                set remote_type [string trim $remote_type]
+            } elseif {[string match "token*" $line]} {
+                set token_json [string range $line 6 end]
+                set token_json [string trim $token_json]
             }
         }
     }
     
-    if {![info exists token_json]} {
+    if {$token_json eq ""} {
         update_status "Error: No token found for remote '$rclone_remote'" red
+        update_status "Please authenticate first: rclone authorize onedrive" red
         return ""
     }
     
     # Parse JSON token
     set access_token ""
     if {[catch {json::json2dict $token_json} token_dict] == 0} {
-        set access_token [dict get $token_dict access_token]
-        if {$access_token eq ""} {
+        # Check if token is expired
+        if {[dict exists $token_dict expiry]} {
+            set expiry_str [dict get $token_dict expiry]
+            if {[catch {
+                # Parse ISO format timestamp (e.g., "2025-10-31T01:22:03.598349702+10:00")
+                # Use clock scan with the full ISO format including timezone
+                set expiry_time [clock scan $expiry_str -format "%Y-%m-%dT%H:%M:%S.%N%z"]
+                set current_time [clock seconds]
+                
+                if {$current_time >= $expiry_time} {
+                    update_status "❌ Error: Token has expired!" red
+                    update_status "   Token expired on: [clock format $expiry_time -format "%Y-%m-%d %H:%M:%S UTC"]" red
+                    update_status "   Current time is: [clock format $current_time -format "%Y-%m-%d %H:%M:%S UTC"]" red
+                    update_status "" red
+                    update_status "To fix this, please refresh your rclone token:" red
+                    update_status "   rclone config reconnect $rclone_remote" red
+                    update_status "Or re-authenticate completely:" red
+                    update_status "   rclone config" red
+                    return ""
+                }
+            } error_msg]} {
+                update_status "Warning: Could not parse token expiry time '$expiry_str': $error_msg" orange
+                # Continue anyway in case the expiry format is different
+            }
+        }
+        
+        if {[dict exists $token_dict access_token]} {
+            set access_token [dict get $token_dict access_token]
+            if {$access_token eq ""} {
+                update_status "Error: No access_token in token JSON" red
+                update_status "Token may be expired. Please re-authenticate: rclone authorize onedrive" red
+            } else {
+                update_status "✅ Successfully extracted access token from rclone.conf" green
+            }
+        } else {
             update_status "Error: No access_token in token JSON" red
+            update_status "Token may be expired. Please re-authenticate: rclone authorize onedrive" red
         }
     } else {
         update_status "Error: Could not parse token JSON: $token_dict" red
