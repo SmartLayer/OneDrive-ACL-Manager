@@ -970,7 +970,18 @@ proc display_recursive_acl {root_path root_permissions all_folders max_depth} {
 }
 
 proc get_access_token {rclone_remote} {
-    set conf_path [file join ~ .config rclone rclone.conf]
+    switch -glob --  $::tcl_platform(platform) {
+        windows {
+            set conf_path [file join $::env(APPDATA) rclone rclone.conf]
+        }
+        macosx {
+            # set conf_path [file join $::env(HOME) Library Application Support MyApp]
+            set conf_path [file join $::env(HOME) .config rclone rclone.conf]
+        }
+        unix {
+            set conf_path [file join $::env(HOME) .config rclone rclone.conf]
+        }
+    }
     
     if {![file exists $conf_path]} {
         update_status "Error: rclone config not found at $conf_path" red
