@@ -29,6 +29,7 @@ package require http
 package require json
 package require json::write
 package require tls
+package require cmdline
 
 # Configure TLS for HTTPS requests
 ::http::register https 443 [list ::tls::socket -autoservername 1]
@@ -3471,9 +3472,9 @@ proc gui_fetch_acl {item_id remote_name} {
 
 # Show help function
 proc show_usage {} {
-    puts "Usage: tclsh acl-inspector.tcl \[PATH\] \[OPTIONS\]"
+    puts "Usage: tclsh acl-inspector.tcl \[OPTIONS\] \[PATH\]"
     puts ""
-    puts "PATH: Item to inspect (default: /)"
+    puts "PATH: Item to inspect (default: /) - must come after all options"
     puts ""
     puts "Options:"
     puts "  --only-user USER       Filter to items USER has access to"
@@ -3489,10 +3490,10 @@ proc show_usage {} {
     puts ""
     puts "Examples:"
     puts "  tclsh acl-inspector.tcl \"Work\""
-    puts "  tclsh acl-inspector.tcl \"Work\" --only-user bob@example.com -r"
-    puts "  tclsh acl-inspector.tcl \"Projects\" --invite alice@example.com"
-    puts "  tclsh acl-inspector.tcl \"Projects\" --invite bob@example.com --read-only"
-    puts "  tclsh acl-inspector.tcl \"Projects\" --remove-user ex@example.com -r --dry-run"
+    puts "  tclsh acl-inspector.tcl --only-user bob@example.com -r \"Work\""
+    puts "  tclsh acl-inspector.tcl --invite alice@example.com \"Projects\""
+    puts "  tclsh acl-inspector.tcl --invite bob@example.com --read-only \"Projects\""
+    puts "  tclsh acl-inspector.tcl --remove-user ex@example.com -r --dry-run \"Projects\""
     puts "  tclsh acl-inspector.tcl --only-user bob@example.com -r --type both"
     exit 1
 }
@@ -3501,93 +3502,55 @@ proc main {argc argv} {
     # CLI mode - process command line arguments with path-first interface
     # Usage: [PATH] [OPTIONS]
 
-    if {$argc == 0 || [llength $argv] == 0} {
+    # Define option specifications for cmdline
+    set options {
+        {only-user.arg "" "Filter to items USER has access to"}
+        {remove-user.arg "" "Remove USER's access (destructive)"}
+        {invite.arg "" "Invite USER with read/write access (inherited by children)"}
+        {r "Include children in scan (recursive, default depth: 3)"}
+        {recursive "Include children in scan (recursive, default depth: 3)"}
+        {max-depth.arg "0" "Max depth (default: 3 with -r, 0 otherwise)"}
+        {type.arg "folders" "Item type: folders|files|both (default: folders)"}
+        {dry-run "Preview changes (with --remove-user)"}
+        {read-only "Grant read-only access (with --invite, default: read/write)"}
+        {debug "Enable debug output"}
+        {remote.arg "OneDrive" "OneDrive remote name"}
+    }
+    
+    # Parse arguments (cmdline modifies argv in-place, leaving positional args)
+    if {[catch {array set params [::cmdline::getoptions argv $options]} err]} {
+        puts "Error: $err"
+        puts ""
         show_usage
     }
     
-    # Initialize variables
-    set path ""
-    set only_user ""
-    set remove_user ""
-    set invite_user ""
-    set max_depth 0
-    set item_type "folders"
-    set dry_run 0
-    set read_only 0
-    set remote_name "OneDrive"
-    set r_flag_used 0
-    set max_depth_explicit 0
+    # Extract PATH (first remaining positional argument after cmdline processing)
+    set path [lindex $argv 0]
     
-    # Debug mode will be set if --debug flag is provided
+    # Set variables from parsed options
+    set only_user $params(only-user)
+    set remove_user $params(remove-user)
+    set invite_user $params(invite)
+    set item_type $params(type)
+    set dry_run $params(dry-run)
+    set read_only $params(read-only)
+    set remote_name $params(remote)
+    
+    # Handle recursive flags and max-depth
+    set r_flag_used [expr {$params(r) || $params(recursive)}]
+    set max_depth_explicit [expr {$params(max-depth) ne "0"}]
+    
+    if {$r_flag_used && !$max_depth_explicit} {
+        set max_depth 3
+    } elseif {$max_depth_explicit} {
+        set max_depth $params(max-depth)
+    } else {
+        set max_depth 0
+    }
+    
+    # Set global debug mode
     global debug_mode
-    set debug_mode 0
-    
-    # First pass: extract PATH (first non-flag argument)
-    set i 0
-    while {$i < [llength $argv]} {
-        set arg [lindex $argv $i]
-        if {$arg eq "--help" || $arg eq "-h"} {
-            show_usage
-        } elseif {[string index $arg 0] ne "-" && $path eq ""} {
-            set path $arg
-            break
-        }
-        incr i
-    }
-    
-    # If no path found, default to root
-    if {$path eq ""} {
-        set path "/"
-    }
-    
-    # Second pass: parse all flags
-    set i 0
-    while {$i < [llength $argv]} {
-        set arg [lindex $argv $i]
-        
-        if {$arg eq "--only-user" && $i + 1 < [llength $argv]} {
-            set only_user [lindex $argv [expr $i + 1]]
-            incr i 2
-        } elseif {$arg eq "--remove-user" && $i + 1 < [llength $argv]} {
-            set remove_user [lindex $argv [expr $i + 1]]
-            incr i 2
-        } elseif {$arg eq "--invite" && $i + 1 < [llength $argv]} {
-            set invite_user [lindex $argv [expr $i + 1]]
-            incr i 2
-        } elseif {$arg eq "-r" || $arg eq "--recursive"} {
-            set r_flag_used 1
-            if {!$max_depth_explicit} {
-                set max_depth 3
-            }
-            incr i
-        } elseif {$arg eq "--max-depth" && $i + 1 < [llength $argv]} {
-            set max_depth [lindex $argv [expr $i + 1]]
-            set max_depth_explicit 1
-            incr i 2
-        } elseif {$arg eq "--type" && $i + 1 < [llength $argv]} {
-            set item_type [lindex $argv [expr $i + 1]]
-            incr i 2
-        } elseif {$arg eq "--dry-run"} {
-            set dry_run 1
-            incr i
-        } elseif {$arg eq "--read-only"} {
-            set read_only 1
-            incr i
-        } elseif {$arg eq "--debug"} {
-            set debug_mode 1
-            incr i
-        } elseif {$arg eq "--remote" && $i + 1 < [llength $argv]} {
-            set remote_name [lindex $argv [expr $i + 1]]
-            incr i 2
-        } elseif {[string index $arg 0] ne "-"} {
-            # Skip PATH if already processed
-            incr i
-        } else {
-            puts "Error: Unknown option '$arg'"
-            puts ""
-            show_usage
-        }
-    }
+    set debug_mode $params(debug)
     
     # Validation: mutual exclusions
     set action_count 0
