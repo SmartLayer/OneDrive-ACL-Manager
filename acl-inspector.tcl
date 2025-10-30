@@ -112,37 +112,33 @@ if {[info commands tk] ne ""} {
     pack $f -fill both -expand yes -padx 10 -pady 10
 
     # Create input frame (top section)
-    set input_frame [ttk::frame $f.input]
-    pack $input_frame -fill x -pady {0 10}
+    pack [ttk::frame $f.input] -fill x -pady {0 10}
 
     # OneDrive URL address bar (read-only, at top)
-    set url_frame [ttk::frame $input_frame.url]
-    pack $url_frame -fill x -pady 2
-    ttk::label $url_frame.label -text "URL:"
-    pack $url_frame.label -side left
-    set url_entry [ttk::entry $url_frame.entry -width 60]
+    pack [ttk::frame $f.input.url] -fill x -pady 2
+    ttk::label $f.input.url.label -text "URL:"
+    pack $f.input.url.label -side left
+    set url_entry [ttk::entry $f.input.url.entry -width 60]
     pack $url_entry -side left -fill x -expand yes -padx {5 0}
     $url_entry insert 0 "https://onedrive.live.com/?id=root"
     $url_entry configure -state readonly
     
     # Hidden remote name entry (for rclone configuration)
-    set remote_entry [ttk::entry $input_frame.remote_hidden -width 20]
+    set remote_entry [ttk::entry $f.input.remote_hidden -width 20]
     $remote_entry insert 0 "OneDrive"
     # Don't pack this - it's hidden
 
     # Multi-column browser frame
-    set browser_frame [ttk::frame $f.browser]
-    pack $browser_frame -fill both -expand yes -pady {0 10}
+    pack [ttk::frame $f.browser] -fill both -expand yes -pady {0 10}
 
-    ttk::label $browser_frame.label -text "Browse OneDrive:"
-    pack $browser_frame.label -anchor w -pady {0 5}
+    ttk::label $f.browser.label -text "Browse OneDrive:"
+    pack $f.browser.label -anchor w -pady {0 5}
 
     # Create canvas and scrollbar for horizontal scrolling
-    set browser_canvas [canvas $browser_frame.canvas -height 300 -highlightthickness 0]
-    set browser_scroll [ttk::scrollbar $browser_frame.scroll -orient horizontal -command "$browser_canvas xview"]
-    pack $browser_scroll -side bottom -fill x
+    set browser_canvas [canvas $f.browser.canvas -height 300 -highlightthickness 0]
+    pack [ttk::scrollbar $f.browser.scroll -orient horizontal -command "$browser_canvas xview"] -side bottom -fill x
     pack $browser_canvas -side top -fill both -expand yes
-    $browser_canvas configure -xscrollcommand "$browser_scroll set"
+    $browser_canvas configure -xscrollcommand "$f.browser.scroll set"
 
     # Create frame inside canvas to hold columns
     set columns_container [ttk::frame $browser_canvas.columns]
@@ -154,14 +150,13 @@ if {[info commands tk] ne ""} {
     }
 
     # Fetch button frame (between browser and ACL display)
-    set fetch_frame [ttk::frame $f.fetch]
-    pack $fetch_frame -fill x -pady {5 10}
+    pack [ttk::frame $f.fetch] -fill x -pady {5 10}
     
-    set fetch_button [ttk::button $fetch_frame.button -text "Fetch ACL" -command on_fetch_button_click -state disabled]
+    set fetch_button [ttk::button $f.fetch.button -text "Fetch ACL" -command on_fetch_button_click -state disabled]
     pack $fetch_button -side left -padx 5
     
     # Action buttons on the right side
-    set action_buttons_frame [ttk::frame $fetch_frame.actions]
+    set action_buttons_frame [ttk::frame $f.fetch.actions]
     pack $action_buttons_frame -side right -padx 5
     
     ttk::button $action_buttons_frame.remove -text "Remove Selected" -command on_remove_selected_click -state disabled
@@ -171,67 +166,62 @@ if {[info commands tk] ne ""} {
     pack $action_buttons_frame.invite -side left -padx 2
 
     # ACL display section (lower half)
-    set acl_section [ttk::frame $f.acl]
-    pack $acl_section -fill both -expand yes
+    pack [ttk::frame $f.acl] -fill both -expand yes
 
     # ACL path label (shows which item's ACL is displayed)
-    set acl_path_frame [ttk::frame $acl_section.path]
-    pack $acl_path_frame -fill x -pady {0 5}
-    ttk::label $acl_path_frame.label -text "ACL for:"
-    pack $acl_path_frame.label -side left
-    set acl_path_label [ttk::entry $acl_path_frame.entry]
+    pack [ttk::frame $f.acl.path] -fill x -pady {0 5}
+    ttk::label $f.acl.path.label -text "ACL for:"
+    pack $f.acl.path.label -side left
+    set acl_path_label [ttk::entry $f.acl.path.entry]
     pack $acl_path_label -side left -fill x -expand yes -padx {5 0}
     $acl_path_label configure -state readonly
 
     # Status label
-    set status_label [ttk::label $acl_section.status -text "Ready" -foreground blue]
+    set status_label [ttk::label $f.acl.status -text "Ready" -foreground blue]
     pack $status_label -fill x -pady {0 10}
 
     # Create treeview frame
-    set tree_frame [ttk::frame $acl_section.tree]
-    pack $tree_frame -fill both -expand yes
+    pack [ttk::frame $f.acl.tree] -fill both -expand yes
 
     # Scrollbars
-    set h_scrollbar [ttk::scrollbar $tree_frame.hscroll -orient horizontal -command "$tree_frame.list xview"]
-    pack $h_scrollbar -side bottom -fill x
+    pack [ttk::scrollbar $f.acl.tree.hscroll -orient horizontal -command "$f.acl.tree.list xview"] -side bottom -fill x
     
-    set v_scrollbar [ttk::scrollbar $tree_frame.vscroll -orient vertical -command "$tree_frame.list yview"]
-    pack $v_scrollbar -side right -fill y
+    pack [ttk::scrollbar $f.acl.tree.vscroll -orient vertical -command "$f.acl.tree.list yview"] -side right -fill y
 
     # Treeview widget (with multi-select enabled)
-    ttk::treeview $tree_frame.list -columns {id roles user email link_type link_scope expires} -show {tree headings} -selectmode extended -height 10 \
-        -yscrollcommand "$v_scrollbar set" -xscrollcommand "$h_scrollbar set"
-    pack $tree_frame.list -side left -fill both -expand yes
+    ttk::treeview $f.acl.tree.list -columns {id roles user email link_type link_scope expires} -show {tree headings} -selectmode extended -height 10 \
+        -yscrollcommand "$f.acl.tree.vscroll set" -xscrollcommand "$f.acl.tree.hscroll set"
+    pack $f.acl.tree.list -side left -fill both -expand yes
 
     # Configure treeview columns
-    $tree_frame.list heading #0 -text ""
-    $tree_frame.list column #0 -width 100 -minwidth 80
+    $f.acl.tree.list heading #0 -text ""
+    $f.acl.tree.list column #0 -width 100 -minwidth 80
 
-    $tree_frame.list heading id -text "ID"
-    $tree_frame.list column id -width 200 -minwidth 150
+    $f.acl.tree.list heading id -text "ID"
+    $f.acl.tree.list column id -width 200 -minwidth 150
 
-    $tree_frame.list heading roles -text "Roles"
-    $tree_frame.list column roles -width 80 -minwidth 60
+    $f.acl.tree.list heading roles -text "Roles"
+    $f.acl.tree.list column roles -width 80 -minwidth 60
 
-    $tree_frame.list heading user -text "User"
-    $tree_frame.list column user -width 150 -minwidth 100
+    $f.acl.tree.list heading user -text "User"
+    $f.acl.tree.list column user -width 150 -minwidth 100
 
-    $tree_frame.list heading email -text "Email"
-    $tree_frame.list column email -width 200 -minwidth 150
+    $f.acl.tree.list heading email -text "Email"
+    $f.acl.tree.list column email -width 200 -minwidth 150
 
-    $tree_frame.list heading link_type -text "Link Type"
-    $tree_frame.list column link_type -width 80 -minwidth 60
+    $f.acl.tree.list heading link_type -text "Link Type"
+    $f.acl.tree.list column link_type -width 80 -minwidth 60
 
-    $tree_frame.list heading link_scope -text "Link Scope"
-    $tree_frame.list column link_scope -width 80 -minwidth 60
+    $f.acl.tree.list heading link_scope -text "Link Scope"
+    $f.acl.tree.list column link_scope -width 80 -minwidth 60
 
-    $tree_frame.list heading expires -text "Expires"
-    $tree_frame.list column expires -width 120 -minwidth 100
+    $f.acl.tree.list heading expires -text "Expires"
+    $f.acl.tree.list column expires -width 120 -minwidth 100
 
     # Configure tags for different permission types
-    $tree_frame.list tag configure owner -background lightgreen
-    $tree_frame.list tag configure write -background lightblue
-    $tree_frame.list tag configure read -background lightyellow
+    $f.acl.tree.list tag configure owner -background lightgreen
+    $f.acl.tree.list tag configure write -background lightblue
+    $f.acl.tree.list tag configure read -background lightyellow
     
     # Fix Treeview row height to match font (prevents text clipping on Linux HiDPI)
     set font_name [ttk::style lookup Treeview -font]
@@ -272,14 +262,12 @@ proc create_column {col_index} {
     global column_list
     
     set container .main.browser.canvas.columns
-    set col_frame [ttk::frame $container.col$col_index -relief ridge -borderwidth 1]
-    pack $col_frame -side left -fill both -expand yes -padx 2
+    pack [ttk::frame $container.col$col_index -relief ridge -borderwidth 1] -side left -fill both -expand yes -padx 2
     
-    set listbox [listbox $col_frame.list -width 25 -height 15]
-    set scrollbar [ttk::scrollbar $col_frame.scroll -orient vertical -command "$listbox yview"]
-    pack $scrollbar -side right -fill y
+    set listbox [listbox $container.col$col_index.list -width 25 -height 15]
+    pack [ttk::scrollbar $container.col$col_index.scroll -orient vertical -command "$listbox yview"] -side right -fill y
     pack $listbox -side left -fill both -expand yes
-    $listbox configure -yscrollcommand "$scrollbar set"
+    $listbox configure -yscrollcommand "$container.col$col_index.scroll set"
     
     # Bind single click event
     bind $listbox <Button-1> [list on_column_item_click $col_index %W %y]
@@ -2064,17 +2052,16 @@ proc show_oauth_modal_dialog {} {
     pack $f.instructions -anchor w -pady {0 15}
     
     # Button frame for the two main action buttons
-    set action_frame [ttk::frame $f.actions]
-    pack $action_frame -fill x -pady {0 15}
+    pack [ttk::frame $f.actions] -fill x -pady {0 15}
     
     # Browser authentication button
-    set browser_btn [ttk::button $action_frame.browser \
+    set browser_btn [ttk::button $f.actions.browser \
         -text "Authenticate with Browser" \
         -width 30]
     pack $browser_btn -pady 5 -anchor center
     
     # Reload token button
-    set reload_btn [ttk::button $action_frame.reload \
+    set reload_btn [ttk::button $f.actions.reload \
         -text "Reload Token File" \
         -width 30]
     pack $reload_btn -pady 5 -anchor center
