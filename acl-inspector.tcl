@@ -45,7 +45,7 @@ proc bgerror {message} {
 }
 
 # Global variables
-set debug_mode 0  ;# Set to 1 to enable debug logging
+set debug_mode 0  ;# Set to 1 to enable debug logging (WARNING: may fail with unicode in folder names)
 set access_token ""
 set item_path ""
 set remote_name "OneDrive"
@@ -249,6 +249,9 @@ if {[info commands tk] ne ""} {
 # ============================================================================
 
 proc debug_log {message} {
+    # Debug logging function
+    # WARNING: Avoid logging user-provided strings (folder names, file names, etc.)
+    # as they may contain unicode characters that crash console output on Windows
     global debug_mode
     if {$debug_mode} {
         puts "DEBUG: $message"
@@ -427,7 +430,8 @@ proc on_column_item_click {col_index widget y_coord} {
     set item_id [dict get $item id]
     set is_folder [dict get $item is_folder]
     
-    debug_log "Clicked: $item_name (ID: $item_id, folder: $is_folder)"
+    # NOTE: Don't log item_name as it may contain unicode that crashes console
+    debug_log "Item clicked: ID=$item_id, is_folder=$is_folder"
     
     # Update selected item
     set selected_item [dict create \
@@ -1084,8 +1088,8 @@ proc get_access_token {{rclone_remote ""}} {
             if {[dict size $refreshed_token] > 0 && [dict exists $refreshed_token access_token]} {
                 debug_log "✓ Successfully refreshed rclone token"
                 set access_token [dict get $refreshed_token access_token]
-                # Note: The refresh_access_token function saves to token.json
-                # The rclone.conf is not updated, but that's okay - we have a fresh token
+                # Rule 1: DON'T save rclone.conf refreshed tokens - use in-memory only
+                debug_log "Using refreshed token in-memory only (not saving)"
                 return $access_token
             } else {
                 debug_log "Token refresh failed"
@@ -1126,6 +1130,21 @@ proc get_access_token {{rclone_remote ""}} {
             debug_log "ERROR: No access_token key in token_dict. Available keys: [dict keys $token_dict]"
             puts "Error: No access_token in token JSON"
             puts "Token may be expired. Please re-authenticate: rclone authorize onedrive"
+        }
+        
+        # IMPORTANT: rclone.conf tokens are in a format that Microsoft Graph API doesn't accept directly
+        # They must be refreshed first, regardless of expiry timestamp
+        if {$access_token ne "" && [dict exists $token_dict refresh_token]} {
+            debug_log "Refreshing rclone.conf token (required for Microsoft Graph API compatibility)"
+            set refreshed_token [refresh_access_token $token_dict]
+            if {[dict size $refreshed_token] > 0 && [dict exists $refreshed_token access_token]} {
+                debug_log "✓ Successfully refreshed rclone token"
+                set access_token [dict get $refreshed_token access_token]
+                # Rule 1: DON'T save rclone.conf refreshed tokens - use in-memory only
+                debug_log "Using refreshed token in-memory only (not saving)"
+            } else {
+                debug_log "⚠️ Token refresh failed, trying original token anyway"
+            }
         }
     } else {
         debug_log "ERROR: Failed to parse token JSON. Error: $token_dict"
@@ -1262,8 +1281,8 @@ proc refresh_access_token {token_data} {
         if {[dict exists $new_token_dict access_token]} {
             debug_log "✓ Token refresh successful, received new access_token"
             
-            # Save the new token to token.json
-            save_token_json $new_token_dict
+            # NOTE: We do NOT save to token.json here
+            # The caller should decide whether to save (OAuth flow) or just use in-memory (rclone refresh)
             
             set result $new_token_dict
         } else {
@@ -1291,6 +1310,10 @@ proc get_access_token_with_capability {rclone_remote {require_capability ""}} {
     # capability_level: "full", "read-only", or "unknown"
     # expiration_info: ISO timestamp or "unknown" or "expired"
     # require_capability: if set to "full", only return full tokens (fail if only read-only available)
+    # 
+    # Save logic encapsulated internally:
+    #   - token.json refreshes ARE saved back to token.json
+    #   - rclone.conf refreshes are NOT saved (in-memory only)
     
     # Try local token.json first
     set token_file "./token.json"
@@ -1351,6 +1374,9 @@ proc get_access_token_with_capability {rclone_remote {require_capability ""}} {
                             }
                             
                             debug_log "✓ Token refresh successful! New capability: $capability"
+                            
+                            # Save refreshed token back to token.json (Rule 2: token.json refresh → save)
+                            save_token_json $new_token_data
                             
                             return [list $access_token $capability $expires_at]
                         } else {
@@ -2028,6 +2054,8 @@ proc make_http_request {url headers {method GET} {body ""}} {
         set response [http::geturl $url {*}$opts]
         set status [http::ncode $response]
         
+        debug_log "HTTP Request to [string range $url 0 80]... returned status: $status"
+        
         # For 204 No Content, don't try to read data (socket may be closed)
         if {$status eq "204"} {
             set data ""
@@ -2037,6 +2065,7 @@ proc make_http_request {url headers {method GET} {body ""}} {
         http::cleanup $response
         
         if {$status ne "200" && $status ne "201" && $status ne "204"} {
+            debug_log "HTTP Error: Status $status, Response: [string range $data 0 300]"
             # Enhanced error message for 401 (authentication) errors
             if {$status eq "401"} {
                 # Try to parse error response for better message
