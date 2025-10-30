@@ -997,7 +997,7 @@ proc find_onedrive_remotes {} {
     set onedrive_remotes {}
     set config_data [read [open $conf_path r]]
     
-    foreach line [split $filename \n] {
+    foreach line [split $config_data \n] {
         set line [string trim $line]
         if {[string match "\\\[*\\\]" $line]} {
             set section_name [string range $line 1 end-1]
@@ -1092,9 +1092,32 @@ proc get_access_token {{rclone_remote ""}} {
         if {[dict exists $token_dict expiry]} {
             set expiry_str [dict get $token_dict expiry]
             if {[catch {
-                # Parse ISO format timestamp (e.g., "2025-10-31T01:22:03.598349702+10:00")
-                # Use clock scan with the full ISO format including timezone
-                set expiry_time [clock scan $expiry_str -format "%Y-%m-%dT%H:%M:%S.%N%z"]
+                # Normalize expiry string for cross-platform compatibility
+                # Handle format: "2025-10-31T01:22:03.598349702+10:00"
+                # Remove fractional seconds, normalize timezone
+                set expiry_normalized [regsub {\.\d+} $expiry_str ""]
+                # Try to parse with normalized timezone format
+                set expiry_time ""
+                
+                # Try with timezone in +HH:MM format first
+                if {[catch {
+                    set expiry_time [clock scan $expiry_normalized]
+                }]} {
+                    # If that fails, try normalizing timezone to +HHMM (Windows compatibility)
+                    set expiry_no_tz [regsub {([+-]\d{2}):(\d{2})$} $expiry_normalized {\1\2}]
+                    if {[catch {
+                        set expiry_time [clock scan $expiry_no_tz]
+                    }]} {
+                        # Last resort: try without timezone
+                        set expiry_no_tz [regsub {[+-]\d{2}:?\d{2}$} $expiry_normalized ""]
+                        if {[catch {
+                            set expiry_time [clock scan $expiry_no_tz]
+                        }]} {
+                            error "Could not parse expiry time"
+                        }
+                    }
+                }
+                
                 set current_time [clock seconds]
                 
                 if {$current_time >= $expiry_time} {
@@ -1109,8 +1132,8 @@ proc get_access_token {{rclone_remote ""}} {
                     return ""
                 }
             } error_msg]} {
-                update_status "Warning: Could not parse token expiry time '$expiry_str': $error_msg" orange
-                # Continue anyway in case the expiry format is different
+                # Silently continue if expiry parsing fails - not critical
+                debug_log "Could not parse token expiry time '$expiry_str': $error_msg"
             }
         }
         
@@ -1120,6 +1143,12 @@ proc get_access_token {{rclone_remote ""}} {
                 update_status "Error: No access_token in token JSON" red
                 update_status "Token may be expired. Please re-authenticate: rclone authorize onedrive" red
             } else {
+                # Sanitize access token: remove quotes, trim whitespace, remove CR/LF
+                set access_token [string trim $access_token]
+                set access_token [regsub -all {^["']|["']$} $access_token ""]
+                set access_token [regsub -all {\r|\n} $access_token ""]
+                set access_token [string trim $access_token]
+                
                 update_status "✅ Successfully extracted access token from rclone.conf" green
             }
         } else {
