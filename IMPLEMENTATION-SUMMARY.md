@@ -2,7 +2,7 @@
 
 ## Latest: 2025-10-23 (Recursive ACL Display)
 
-This document summarizes the successful implementation of ACL editing functionality in the OneDrive ACL Inspector with a task-oriented, modeless interface, improved OAuth authentication flow, and user-centric recursive ACL display.
+This document summarises the successful implementation of ACL editing functionality in the OneDrive ACL Inspector with a task-oriented interface, improved OAuth authentication flow, and user-centric recursive ACL display.
 
 ## Latest Update: Recursive ACL Display (2025-10-23)
 
@@ -172,58 +172,20 @@ Summary: 5 unique user(s) across 1 root folder + 3 subfolder(s)
 
 ## Features Implemented
 
-### 1. Token Management with Capability Detection
-
-**Location**: Lines 624-739
-
-- `check_token_capability()` - Parses scope field from token.json to determine "full" vs "read-only" capability
-- `get_access_token_with_capability()` - Checks token.json first (with scope validation), falls back to rclone.conf
-- `save_token_json()` - Saves OAuth token response with proper format including scope field
-
-**Key Behavior**:
-- Token expiry is checked lazily (just-in-time) during API operations, not proactively when loading
-- token.json with `Sites.Manage.All` + `Files.ReadWrite*` scopes → "full" capability
-- rclone.conf tokens → "read-only" capability (no scope information available)
-
-### 2. OAuth Flow for Token Acquisition
-
-**Location**: Lines 741-914
-
-- `oauth_start_local_server()` - Starts HTTP server on port 53682
-- `oauth_accept()` - Handles OAuth callback, extracts authorization code
-- `oauth_build_auth_url()` - Builds Microsoft authorization URL with required scopes
-- `oauth_exchange_token()` - Exchanges authorization code for access token
-- `acquire_elevated_token()` - Orchestrates full OAuth flow with 2-minute timeout
-
-**OAuth Configuration**:
-```tcl
-Client ID: b15665d9-eda6-4092-8539-0eec376afd59
-Scopes: Files.Read Files.ReadWrite Files.ReadWrite.All Sites.Manage.All offline_access
-Redirect URI: http://localhost:53682/
-```
-
-**Browser Support**: Cross-platform browser launch (Windows, macOS, Linux)
-
-### 3. UI Enhancements - Task-Oriented Design (NO MODES!)
+### 1. UI Enhancements - Task-Oriented Design
 
 **Action Buttons** (Lines 137-145):
 - Located on the RIGHT SIDE of the fetch button frame
 - Two buttons: "Remove Selected" and "Invite User"
-- **Always visible** after fetching ACL (no mode switching)
+- Always visible after fetching ACL
 - Disabled by default, enabled when ACL is fetched
-- Permission check happens **when clicked** - transparent to user
-
-**Design Philosophy**:
-- **No "Edit Mode"** - users don't need to understand or manage modes
-- Just click what you want to do, and the app checks permissions
-- If elevated permission needed, OAuth dialog appears automatically
-- Much better UX - task-oriented rather than mode-oriented
+- Permission check happens when clicked
 
 **Multi-Select Treeview** (Line 180):
 - `selectmode extended` - supports Ctrl+Click and Shift+Click selection
 - Allows selecting multiple permissions for bulk removal
 
-### 4. Microsoft Graph API Operations
+### 2. Microsoft Graph API Operations
 
 **Location**: Lines 959-1058
 
@@ -243,7 +205,7 @@ Redirect URI: http://localhost:53682/
 
 **HTTP Method Support**: Enhanced `make_http_request()` to support GET, POST, DELETE methods (Lines 916-948)
 
-### 5. Just-In-Time Permission Checking
+### 3. Just-In-Time Permission Checking
 
 **Location**: Lines 1060-1095
 
@@ -270,7 +232,7 @@ proc on_invite_user_click {} {
 }
 ```
 
-### 6. Interactive Dialogs and Handlers
+### 4. Interactive Dialogs and Handlers
 
 **Location**: Lines 1097-1284
 
@@ -294,7 +256,7 @@ proc on_invite_user_click {} {
 - Bulk removes selected permissions
 - Reports success/failure counts
 
-### 7. Error Handling and User Feedback
+### 5. Error Handling and User Feedback
 
 **Status Messages**:
 - Token capability displayed: "Using token (capability: full/read-only)"
@@ -306,7 +268,6 @@ proc on_invite_user_click {} {
 **Token Expiry Handling**:
 - 401 responses show "Token expired - please try again"
 - User can click the button again to re-authenticate
-- No need to manually manage modes
 
 **API Error Codes**:
 - 401 Unauthorized → Token expired, prompt to try again
@@ -314,7 +275,7 @@ proc on_invite_user_click {} {
 - 404 Not Found → Item/permission not found
 - 429 Rate Limit → Handled in HTTP request wrapper
 
-### 8. Integration Points
+### 6. Integration Points
 
 #### `fetch_acl()` Enhancement (Lines 1746-1904)
 - Now uses `get_access_token_with_capability()` instead of `get_access_token()`
@@ -324,44 +285,13 @@ proc on_invite_user_click {} {
 
 #### Startup (Lines 1906-1917)
 - Checks token capability on launch
-- Displays appropriate status message:
-  - "✅ Elevated token detected - Edit Mode available"
-  - "ℹ️ Using read-only token - Authenticate for Edit Mode"
-  - "⚠️ Unknown token capability"
+- Displays appropriate status message based on available permissions
 
 #### `refresh_current_acl()` Helper (Lines 1286-1293)
 - Automatically refreshes ACL display after modifications
 - Uses stored `selected_item` path
 
-## Design Decisions
-
-### Why No "Edit Mode"?
-
-The original design had an "Edit Mode" button that users had to click to enable editing. This was poor UX because:
-
-1. **Users have to understand modes** - cognitive overhead
-2. **Extra step** - click "Edit Mode" before doing anything
-3. **Unclear state** - "Am I in edit mode? What mode am I in?"
-4. **Not task-oriented** - users think "I want to invite a user", not "I need to enter edit mode"
-
-### Better Design: Just-In-Time Permission Check
-
-The revised design:
-
-1. **Action buttons always visible** (after fetching ACL)
-2. **Click what you want to do** - "Invite User", "Remove Selected"
-3. **App checks permissions automatically** when button clicked
-4. **OAuth prompt only if needed** - transparent to user
-5. **No mental model of modes** - just direct action
-
-This is **much more intuitive** and follows modern UX principles.
-
 ## Testing Checklist
-
-### Token Management
-- [x] Load token from token.json with valid scope → "full" capability
-- [x] Fallback to rclone.conf when token.json missing → "read-only"
-- [x] Token capability displayed on startup and after fetch
 
 ### OAuth Flow
 - [ ] Click "Invite User" with read-only token → OAuth prompt appears
@@ -394,8 +324,7 @@ This is **much more intuitive** and follows modern UX principles.
 ## Files Modified
 
 1. `acl-inspector.tcl` - Main application file
-   - Added ~1000 lines of new functionality
-   - Removed mode-based design (~200 lines)
+   - Added ~1000 lines of ACL editing functionality
    - No breaking changes to existing CLI mode
    - GUI mode enhanced with task-oriented edit capabilities
 
@@ -407,23 +336,16 @@ This is **much more intuitive** and follows modern UX principles.
 3. Select item and click "Fetch ACL"
 4. View permissions in treeview
 
-### For ACL Editing (Seamless, No Modes!)
+### For ACL Editing
 1. After fetching ACL, action buttons appear on the right
 2. Click "Invite User" or "Remove Selected" as needed
-3. If you have elevated token → operation proceeds immediately
-4. If you have read-only token:
-   - Dialog prompts: "This operation requires elevated permissions. Authenticate?"
-   - Click "Yes" to open browser
-   - Sign in to Microsoft account
+3. If elevated permissions are required:
+   - Authentication dialogue appears automatically
+   - Choose "Authenticate with Browser" or "Reload Token File"
+   - For browser authentication: sign in to Microsoft account
    - Token saved to token.json automatically
    - Operation proceeds after authentication
-5. Next time you click an action → no prompt (you already have the token)
-
-**No mode switching needed!** Just click what you want to do.
-
-### Token Files
-- `token.json` - Elevated token with editing permissions (short-lived)
-- `~/.config/rclone/rclone.conf` - Fallback read-only token
+4. Subsequent operations use the saved token
 
 ## Security Considerations
 
@@ -498,47 +420,6 @@ return $result
 
 **Rule of Thumb**: Never use `return` inside a `catch` block. Always set a variable and return after the catch completes.
 
-### Token File Formats
-
-**token.json** (created by OAuth flow):
-```json
-{
-  "access_token": "EwA4BMl6BAAUBKgm8k1UswUNwklmy2v7...",
-  "token_type": "Bearer",
-  "expires_at": "2025-10-23T10:30:00Z",
-  "scope": "Files.Read Files.ReadWrite Files.ReadWrite.All Sites.Manage.All offline_access",
-  "expires_in": 3599,
-  "refresh_token": "M.C547_BL2.0.U.-CrM4qrpqFlFUlgCyy*vjky...",
-  "drive_id": "5D1B2B3BE100F93B",
-  "drive_type": "personal"
-}
-```
-
-**Key Points**:
-- **Must include `scope` field** for capability detection
-- Uses `json::write` module (NOT `json::dict2json` which has quoting issues)
-- File permissions: 0600 (owner read/write only)
-
-**rclone.conf token** (fallback):
-- Located: `~/.config/rclone/rclone.conf`
-- **Does NOT contain scope field** - always treated as "read-only"
-- Cannot determine capabilities from rclone tokens
-- Microsoft OneDrive tokens are NOT standard JWTs and cannot be decoded
-
-### Capability Detection Logic
-
-**Method 1: Check scope in token.json** (Preferred)
-- Parse `scope` field from token.json
-- Look for: `Sites.Manage.All` AND (`Files.ReadWrite` OR `Files.ReadWrite.All`)
-- If both present → "full" capability
-- If only read scopes → "read-only"
-
-**Method 2: Token source heuristic** (Fallback)
-- token.json → assume "full" (user explicitly acquired it)
-- rclone.conf → assume "read-only" (standard rclone permissions)
-
-**Why NOT decode JWT**: Microsoft OneDrive tokens use proprietary format, not standard JWT. Cannot decode to extract claims.
-
 ## Future Enhancements
 
 Potential improvements not implemented in this version:
@@ -548,10 +429,10 @@ Potential improvements not implemented in this version:
 3. Bulk invite multiple users at once
 4. Export/import ACL configurations
 5. Visual indicators for inherited vs explicit permissions
-6. "Strip Explicit" button (removed to simplify UI - can be added back if needed)
 
 ## References
 
 - Microsoft Graph API Documentation: https://learn.microsoft.com/en-us/graph/api/driveitem-invite
 - Microsoft OAuth 2.0 Documentation: https://learn.microsoft.com/en-us/azure/active-directory/develop/v2-oauth2-auth-code-flow
 - Tcl catch Documentation: https://www.tcl.tk/man/tcl8.6/TclCmd/catch.html
+- Token Authentication Design: See `TOKEN-IMPLEMENTATION.md` for detailed token management architecture
