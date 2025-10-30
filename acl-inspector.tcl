@@ -8,6 +8,7 @@
 # 2. Use it to make direct Microsoft Graph API calls
 # 3. Display ACL (Access Control List) in a treeview widget or console
 #
+#
 # Prerequisites:
 # - rclone must be installed and configured with OneDrive remote
 # - tls package for HTTPS requests (package require tls)
@@ -1073,7 +1074,15 @@ proc get_access_token {{rclone_remote ""}} {
                 set remote_type [string range $line 5 end]
                 set remote_type [string trim $remote_type]
             } elseif {[string match "token*" $line]} {
-                set token_json [string range $line 6 end]
+                # Handle rclone.conf format: "token = {...}" or "token{...}"
+                # Find the '=' and extract everything after it
+                set equal_pos [string first "=" $line]
+                if {$equal_pos >= 0} {
+                    set token_json [string range $line [expr $equal_pos + 1] end]
+                } else {
+                    # No '=' found, try to extract after "token"
+                    set token_json [string range $line 6 end]
+                }
                 set token_json [string trim $token_json]
             }
         }
@@ -1091,6 +1100,7 @@ proc get_access_token {{rclone_remote ""}} {
         # Check if token is expired
         if {[dict exists $token_dict expiry]} {
             set expiry_str [dict get $token_dict expiry]
+            debug_log "Token expiry string: $expiry_str"
             if {[catch {
                 # Normalize expiry string for cross-platform compatibility
                 # Handle format: "2025-10-31T01:22:03.598349702+10:00"
@@ -1149,13 +1159,16 @@ proc get_access_token {{rclone_remote ""}} {
                 set access_token [regsub -all {\r|\n} $access_token ""]
                 set access_token [string trim $access_token]
                 
+                
                 update_status "✅ Successfully extracted access token from rclone.conf" green
             }
         } else {
+            debug_log "ERROR: No access_token key in token_dict. Available keys: [dict keys $token_dict]"
             update_status "Error: No access_token in token JSON" red
             update_status "Token may be expired. Please re-authenticate: rclone authorize onedrive" red
         }
     } else {
+        debug_log "ERROR: Failed to parse token JSON. Error: $token_dict"
         update_status "Error: Could not parse token JSON: $token_dict" red
     }
     
