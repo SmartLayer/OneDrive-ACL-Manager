@@ -1003,8 +1003,8 @@ proc get_access_token {{rclone_remote ""}} {
     set conf_path [get_rclone_conf_path]
     
     if {![file exists $conf_path]} {
-        gui_update_status "Error: rclone config not found at $conf_path" red
-        gui_update_status "Please configure rclone first: rclone config" red
+        puts "Error: rclone config not found at $conf_path"
+        puts "Please configure rclone first: rclone config"
         return ""
     }
     
@@ -1013,21 +1013,18 @@ proc get_access_token {{rclone_remote ""}} {
         set onedrive_remotes [find_onedrive_remotes]
         
         if {[llength $onedrive_remotes] == 0} {
-            gui_update_status "Error: No OneDrive remotes found in rclone configuration" red
-            gui_update_status "Please configure OneDrive first: rclone config" red
+            puts "Error: No OneDrive remotes found in rclone configuration"
+            puts "Please configure OneDrive first: rclone config"
             return ""
         }
         
         if {[llength $onedrive_remotes] == 1} {
             set rclone_remote [lindex $onedrive_remotes 0]
-            gui_update_status "No remote name given, using first OneDrive remote: $rclone_remote" blue
+            debug_log "No remote name given, using first OneDrive remote: $rclone_remote"
         } else {
-            gui_update_status "No remote name given, found [llength $onedrive_remotes] OneDrive remotes:" blue
-            for {set i 0} {$i < [llength $onedrive_remotes]} {incr i} {
-                gui_update_status "  [expr {$i + 1}]. [lindex $onedrive_remotes $i]" blue
-            }
+            debug_log "No remote name given, found [llength $onedrive_remotes] OneDrive remotes"
             set rclone_remote [lindex $onedrive_remotes 0]
-            gui_update_status "Using first OneDrive remote: $rclone_remote" blue
+            debug_log "Using first OneDrive remote: $rclone_remote"
         }
     }
     
@@ -1075,8 +1072,8 @@ proc get_access_token {{rclone_remote ""}} {
     }
     
     if {$token_json eq ""} {
-        gui_update_status "Error: No token found for remote '$rclone_remote'" red
-        gui_update_status "Please authenticate first: rclone authorize onedrive" red
+        puts "Error: No token found for remote '$rclone_remote'"
+        puts "Please authenticate first: rclone authorize onedrive"
         return ""
     }
     
@@ -1117,14 +1114,14 @@ proc get_access_token {{rclone_remote ""}} {
                 set current_time [clock seconds]
                 
                 if {$current_time >= $expiry_time} {
-                    gui_update_status "❌ Error: Token has expired!" red
-                    gui_update_status "   Token expired on: [clock format $expiry_time -format "%Y-%m-%d %H:%M:%S UTC"]" red
-                    gui_update_status "   Current time is: [clock format $current_time -format "%Y-%m-%d %H:%M:%S UTC"]" red
-                    gui_update_status "" red
-                    gui_update_status "To fix this, please refresh your rclone token:" red
-                    gui_update_status "   rclone config reconnect $rclone_remote" red
-                    gui_update_status "Or re-authenticate completely:" red
-                    gui_update_status "   rclone config" red
+                    puts "❌ Error: Token has expired!"
+                    puts "   Token expired on: [clock format $expiry_time -format "%Y-%m-%d %H:%M:%S UTC"]"
+                    puts "   Current time is: [clock format $current_time -format "%Y-%m-%d %H:%M:%S UTC"]"
+                    puts ""
+                    puts "To fix this, please refresh your rclone token:"
+                    puts "   rclone config reconnect $rclone_remote"
+                    puts "Or re-authenticate completely:"
+                    puts "   rclone config"
                     return ""
                 }
             } error_msg]} {
@@ -1136,8 +1133,8 @@ proc get_access_token {{rclone_remote ""}} {
         if {[dict exists $token_dict access_token]} {
             set access_token [dict get $token_dict access_token]
             if {$access_token eq ""} {
-                gui_update_status "Error: No access_token in token JSON" red
-                gui_update_status "Token may be expired. Please re-authenticate: rclone authorize onedrive" red
+                puts "Error: No access_token in token JSON"
+                puts "Token may be expired. Please re-authenticate: rclone authorize onedrive"
             } else {
                 # Sanitize access token: remove quotes, trim whitespace, remove CR/LF
                 set access_token [string trim $access_token]
@@ -1145,17 +1142,16 @@ proc get_access_token {{rclone_remote ""}} {
                 set access_token [regsub -all {\r|\n} $access_token ""]
                 set access_token [string trim $access_token]
                 
-                
-                gui_update_status "✅ Successfully extracted access token from rclone.conf" green
+                debug_log "Successfully extracted access token from rclone.conf"
             }
         } else {
             debug_log "ERROR: No access_token key in token_dict. Available keys: [dict keys $token_dict]"
-            gui_update_status "Error: No access_token in token JSON" red
-            gui_update_status "Token may be expired. Please re-authenticate: rclone authorize onedrive" red
+            puts "Error: No access_token in token JSON"
+            puts "Token may be expired. Please re-authenticate: rclone authorize onedrive"
         }
     } else {
         debug_log "ERROR: Failed to parse token JSON. Error: $token_dict"
-        gui_update_status "Error: Could not parse token JSON: $token_dict" red
+        puts "Error: Could not parse token JSON: $token_dict"
     }
     
     return $access_token
@@ -1362,7 +1358,6 @@ proc get_access_token_with_capability {rclone_remote {require_capability ""}} {
                     
                     if {[dict exists $token_data refresh_token]} {
                         debug_log "Attempting automatic token refresh..."
-                        gui_update_status "Token expired, refreshing..." blue
                         
                         set new_token_data [refresh_access_token $token_data]
                         
@@ -1378,17 +1373,14 @@ proc get_access_token_with_capability {rclone_remote {require_capability ""}} {
                             }
                             
                             debug_log "✓ Token refresh successful! New capability: $capability"
-                            gui_update_status "✓ Token refreshed successfully (capability: $capability)" green
                             
                             return [list $access_token $capability $expires_at]
                         } else {
                             # Refresh failed
                             debug_log "Token refresh failed, falling back to rclone.conf"
-                            gui_update_status "Token refresh failed, falling back to rclone token..." orange
                         }
                     } else {
                         debug_log "No refresh_token available, falling back to rclone.conf"
-                        gui_update_status "Token expired (no refresh token), falling back to rclone token..." orange
                     }
                 } else {
                     # Cannot determine expiration (-1)
@@ -1413,14 +1405,13 @@ proc get_access_token_with_capability {rclone_remote {require_capability ""}} {
     # Fallback to rclone.conf (assume read-only)
     if {$require_capability eq "full"} {
         debug_log "Full capability required but only rclone token available"
-        gui_update_status "❌ Operation requires full permissions. Please re-authenticate." red
+        puts "❌ Operation requires full permissions. Please re-authenticate."
         return [list "" "insufficient" "n/a"]
     }
     
     set access_token [get_access_token $rclone_remote]
     if {$access_token ne ""} {
         debug_log "Using rclone.conf token (read-only mode)"
-        gui_update_status "Using rclone.conf token (read-only)" blue
         return [list $access_token "read-only" "unknown"]
     }
     

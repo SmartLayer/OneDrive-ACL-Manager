@@ -1,0 +1,219 @@
+OneDrive ACL Inspector
+Path: 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)
+Remote: OneDrive
+Max depth: 2
+
+✅ Using token (capability: full)
+
+🔍 Scanning folder hierarchy (max depth: 2)...
+
+   📁 Scanned 10 folders...
+
+✅ Scan complete. Scanned 14 folder(s).
+
+================================================================================
+=== ACL for "🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)" (recursive scan, max depth: 2) ===
+================================================================================
+
+📊 Root Folder Permissions:
+   • admin@weiwu.au                                     (write)
+   • amanuensis12345@gmail.com                          (write)
+   • barbaraquinonesv@outlook.com                       (write)
+   • liamovsisyann@gmail.com                            (write)
+   • m.janalik@hotmail.com                              (write)
+   • monicagong58@gmail.com                             (write)
+   • my@colourful.land                                  (write)
+   • security@weiwu.au                                  (write)
+   • tom.jose.sunil@gmail.com                           (write)
+   • yunga588@gmail.com                                 (write)
+
+📋 Additional Users in Subfolders:
+   amschepisi@hotmail.com
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/📢 Marketing (write)
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/📊 Shared Resources & Assets (write)
+
+   belinda3843@hotmail.com
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/💒 Weddings and Private Functions (write)
+
+   dimplebarcelona0906@outlook.com
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/📘 Operations, Compliance, Standards (write)
+
+   diogomgaustralia@gmail.com
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/🍔 F&B (write)
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/🔔 Guest Experience (write)
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/📘 Operations, Compliance, Standards (write)
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/📅 Planning & Coordination (write)
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/📊 Shared Resources & Assets (write)
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/💒 Weddings and Private Functions (write)
+
+   hreventsmanager@hotmail.com
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/💁‍ Digital Service (write)
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/📘 Operations, Compliance, Standards (write)
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/💒 Weddings and Private Functions (write)
+
+   infobelindahudson@gmail.com
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/💒 Weddings and Private Functions (write)
+
+   john_2217@icloud.com
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/💁‍ Digital Service (write)
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/🔔 Guest Experience (write)
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/📘 Operations, Compliance, Standards (write)
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/📊 Shared Resources & Assets (write)
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/💒 Weddings and Private Functions (write)
+
+   mwood25nz@gmail.com
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/💁‍ Digital Service (write)
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/🍔 F&B (write)
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/📢 Marketing (write)
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/📘 Operations, Compliance, Standards (write)
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/📅 Planning & Coordination (write)
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/📊 Shared Resources & Assets (write)
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/💒 Weddings and Private Functions (write)
+
+   savvyayla@gmail.com
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/📅 Planning & Coordination (write)
+
+   somsaysam@gmail.com
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/💁‍ Digital Service (write)
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/🍔 F&B (write)
+
+   tania@zaetta.com
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/📢 Marketing (write)
+
+   tsikoshamrelashvili@outlook.com
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/📢 Marketing (write)
+      └─ 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/📊 Shared Resources & Assets (write)
+
+⚠️  Special Folders (Non-Inherited Permissions):
+   📁 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/💁‍ Digital Service (EXTENDED)
+      • admin@weiwu.au                                 (write)
+      • amanuensis12345@gmail.com                      (write)
+      • barbaraquinonesv@outlook.com                   (write)
+      • hreventsmanager@hotmail.com                    (write)
+      • john_2217@icloud.com                           (write)
+      • liamovsisyann@gmail.com                        (write)
+      • m.janalik@hotmail.com                          (write)
+      • monicagong58@gmail.com                         (write)
+      • mwood25nz@gmail.com                            (write)
+      • my@colourful.land                              (write)
+      • security@weiwu.au                              (write)
+      • somsaysam@gmail.com                            (write)
+      • tom.jose.sunil@gmail.com                       (write)
+      • yunga588@gmail.com                             (write)
+
+   📁 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/🍔 F&B (EXTENDED)
+      • admin@weiwu.au                                 (write)
+      • amanuensis12345@gmail.com                      (write)
+      • barbaraquinonesv@outlook.com                   (write)
+      • diogomgaustralia@gmail.com                     (write)
+      • liamovsisyann@gmail.com                        (write)
+      • m.janalik@hotmail.com                          (write)
+      • monicagong58@gmail.com                         (write)
+      • mwood25nz@gmail.com                            (write)
+      • my@colourful.land                              (write)
+      • security@weiwu.au                              (write)
+      • somsaysam@gmail.com                            (write)
+      • tom.jose.sunil@gmail.com                       (write)
+      • yunga588@gmail.com                             (write)
+
+   📁 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/🔔 Guest Experience (EXTENDED)
+      • admin@weiwu.au                                 (write)
+      • amanuensis12345@gmail.com                      (write)
+      • barbaraquinonesv@outlook.com                   (write)
+      • diogomgaustralia@gmail.com                     (write)
+      • john_2217@icloud.com                           (write)
+      • liamovsisyann@gmail.com                        (write)
+      • m.janalik@hotmail.com                          (write)
+      • monicagong58@gmail.com                         (write)
+      • my@colourful.land                              (write)
+      • security@weiwu.au                              (write)
+      • tom.jose.sunil@gmail.com                       (write)
+      • yunga588@gmail.com                             (write)
+
+   📁 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/📢 Marketing (EXTENDED)
+      • admin@weiwu.au                                 (write)
+      • amanuensis12345@gmail.com                      (write)
+      • amschepisi@hotmail.com                         (write)
+      • barbaraquinonesv@outlook.com                   (write)
+      • liamovsisyann@gmail.com                        (write)
+      • m.janalik@hotmail.com                          (write)
+      • monicagong58@gmail.com                         (write)
+      • mwood25nz@gmail.com                            (write)
+      • my@colourful.land                              (write)
+      • security@weiwu.au                              (write)
+      • tania@zaetta.com                               (write)
+      • tom.jose.sunil@gmail.com                       (write)
+      • tsikoshamrelashvili@outlook.com                (write)
+      • yunga588@gmail.com                             (write)
+
+   📁 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/📘 Operations, Compliance, Standards (EXTENDED)
+      • admin@weiwu.au                                 (write)
+      • amanuensis12345@gmail.com                      (write)
+      • barbaraquinonesv@outlook.com                   (write)
+      • dimplebarcelona0906@outlook.com                (write)
+      • diogomgaustralia@gmail.com                     (write)
+      • hreventsmanager@hotmail.com                    (write)
+      • john_2217@icloud.com                           (write)
+      • liamovsisyann@gmail.com                        (write)
+      • m.janalik@hotmail.com                          (write)
+      • monicagong58@gmail.com                         (write)
+      • mwood25nz@gmail.com                            (write)
+      • my@colourful.land                              (write)
+      • security@weiwu.au                              (write)
+      • tom.jose.sunil@gmail.com                       (write)
+      • yunga588@gmail.com                             (write)
+
+   📁 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/📅 Planning & Coordination (EXTENDED)
+      • admin@weiwu.au                                 (write)
+      • amanuensis12345@gmail.com                      (write)
+      • barbaraquinonesv@outlook.com                   (write)
+      • diogomgaustralia@gmail.com                     (write)
+      • liamovsisyann@gmail.com                        (write)
+      • m.janalik@hotmail.com                          (write)
+      • monicagong58@gmail.com                         (write)
+      • mwood25nz@gmail.com                            (write)
+      • my@colourful.land                              (write)
+      • savvyayla@gmail.com                            (write)
+      • security@weiwu.au                              (write)
+      • tom.jose.sunil@gmail.com                       (write)
+      • yunga588@gmail.com                             (write)
+
+   📁 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/📊 Shared Resources & Assets (EXTENDED)
+      • admin@weiwu.au                                 (write)
+      • amanuensis12345@gmail.com                      (write)
+      • amschepisi@hotmail.com                         (write)
+      • barbaraquinonesv@outlook.com                   (write)
+      • diogomgaustralia@gmail.com                     (write)
+      • john_2217@icloud.com                           (write)
+      • liamovsisyann@gmail.com                        (write)
+      • m.janalik@hotmail.com                          (write)
+      • monicagong58@gmail.com                         (write)
+      • mwood25nz@gmail.com                            (write)
+      • my@colourful.land                              (write)
+      • security@weiwu.au                              (write)
+      • tom.jose.sunil@gmail.com                       (write)
+      • tsikoshamrelashvili@outlook.com                (write)
+      • yunga588@gmail.com                             (write)
+
+   📁 🇦🇺 Colourful.land Pty Ltd (Business Name = Historic Rivermill)/💒 Weddings and Private Functions (EXTENDED)
+      • admin@weiwu.au                                 (write)
+      • amanuensis12345@gmail.com                      (write)
+      • barbaraquinonesv@outlook.com                   (write)
+      • belinda3843@hotmail.com                        (write)
+      • diogomgaustralia@gmail.com                     (write)
+      • hreventsmanager@hotmail.com                    (write)
+      • infobelindahudson@gmail.com                    (write)
+      • john_2217@icloud.com                           (write)
+      • liamovsisyann@gmail.com                        (write)
+      • m.janalik@hotmail.com                          (write)
+      • monicagong58@gmail.com                         (write)
+      • mwood25nz@gmail.com                            (write)
+      • my@colourful.land                              (write)
+      • security@weiwu.au                              (write)
+      • tom.jose.sunil@gmail.com                       (write)
+      • yunga588@gmail.com                             (write)
+
+--------------------------------------------------------------------------------
+Summary: 22 unique user(s) across 1 root folder + 13 subfolder(s)
+--------------------------------------------------------------------------------
+
