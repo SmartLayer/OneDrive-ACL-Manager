@@ -25,12 +25,6 @@
 #    wish acl_demo.tcl "Documents"
 #    tclsh acl_demo.tcl "Documents/Project" "MyOneDrive"
 
-# Check if we're running in GUI mode (wish) or CLI mode (tclsh)
-if {[info commands tk] ne ""} {
-    package require Tk
-    package require Ttk
-}
-
 package require http
 package require json
 package require json::write
@@ -3764,6 +3758,9 @@ proc main {argc argv} {
 }
 
 if {[info commands tk] ne ""} {
+    package require Tk
+    package require Ttk
+
     # ========================================================================
     # GUI MODE FUNCTIONS
     # ========================================================================
