@@ -507,21 +507,35 @@ proc url_encode {path} {
     return $encoded
 }
 
+proc extract_users_from_perm {perm} {
+    # Extract ALL users from grantedTo or grantedToIdentities
+    # Returns list of {displayName email} pairs (can be multiple for grantedToIdentities)
+    set users {}
+    
+    if {[dict exists $perm grantedTo user]} {
+        set user [dict get $perm grantedTo user]
+        lappend users [list [dict get $user displayName] [dict get $user email]]
+    }
+    
+    if {[dict exists $perm grantedToIdentities]} {
+        set identities [dict get $perm grantedToIdentities]
+        foreach identity $identities {
+            if {[dict exists $identity user]} {
+                set user [dict get $identity user]
+                lappend users [list [dict get $user displayName] [dict get $user email]]
+            }
+        }
+    }
+    
+    return $users
+}
+
 proc extract_user_info {perm} {
     # Extract user display name and email from a permission object
     # Returns {displayName email} or {"N/A" "N/A"}
-    if {[dict exists $perm grantedTo user]} {
-        set user [dict get $perm grantedTo user]
-        return [list [dict get $user displayName] [dict get $user email]]
-    } elseif {[dict exists $perm grantedToIdentities]} {
-        set identities [dict get $perm grantedToIdentities]
-        if {[llength $identities] > 0} {
-            set identity [lindex $identities 0]
-            if {[dict exists $identity user]} {
-                set user [dict get $identity user]
-                return [list [dict get $user displayName] [dict get $user email]]
-            }
-        }
+    set users [extract_users_from_perm $perm]
+    if {[llength $users] > 0} {
+        return [lindex $users 0]
     }
     return [list "N/A" "N/A"]
 }
@@ -559,11 +573,10 @@ proc update_status {message {color blue}} {
 
 proc extract_users_from_permissions {permissions} {
     # Extract all non-owner users from permissions
-    # Returns: list of {email role} pairs
+    # Returns: dict of {email role} pairs
     set users_dict {}
     
     foreach perm $permissions {
-        # Skip owner permissions
         if {[is_owner_permission $perm]} {
             continue
         }
@@ -576,26 +589,11 @@ proc extract_users_from_permissions {permissions} {
             set role [lindex $roles 0]
         }
         
-        # Check grantedTo user
-        if {[dict exists $perm grantedTo user]} {
-            set user [dict get $perm grantedTo user]
-            set email [string tolower [dict get $user email]]
+        set user_list [extract_users_from_perm $perm]
+        foreach user_info $user_list {
+            set email [string tolower [lindex $user_info 1]]
             if {$email ne ""} {
                 dict set users_dict $email $role
-            }
-        }
-        
-        # Check grantedToIdentities (OneDrive Business)
-        if {[dict exists $perm grantedToIdentities]} {
-            set identities [dict get $perm grantedToIdentities]
-            foreach identity $identities {
-                if {[dict exists $identity user]} {
-                    set user [dict get $identity user]
-                    set email [string tolower [dict get $user email]]
-                    if {$email ne ""} {
-                        dict set users_dict $email $role
-                    }
-                }
             }
         }
     }
@@ -2520,12 +2518,10 @@ proc analyze_permissions {permissions} {
     set shared_users {}
     
     foreach perm $permissions {
-        # Skip owner permissions (identified by "owner" role)
         if {[is_owner_permission $perm]} {
             continue
         }
         
-        # Check if this is a link permission
         if {[dict exists $perm link]} {
             set link [dict get $perm link]
             if {[dict exists $link type]} {
@@ -2533,29 +2529,17 @@ proc analyze_permissions {permissions} {
             }
         }
         
-        # Check if this is a direct permission
-        if {[dict exists $perm grantedTo user]} {
+        set user_list [extract_users_from_perm $perm]
+        if {[llength $user_list] > 0} {
             set has_direct_sharing 1
-            lassign [extract_user_info $perm] user_name email
-            if {$email ne "N/A" && [lsearch $shared_users $email] < 0} {
-                lappend shared_users $email
-            }
-        }
-        
-        # Check grantedToIdentities (OneDrive Business)
-        if {[dict exists $perm grantedToIdentities]} {
-            set identities [dict get $perm grantedToIdentities]
-            foreach identity $identities {
-                if {[dict exists $identity user]} {
-                    set user [dict get $identity user]
-                    set has_direct_sharing 1
-                    set email [dict get $user email]
-                    if {$email eq ""} {
-                        set email [dict get $user displayName]
-                    }
-                    if {$email ne "" && [lsearch $shared_users $email] < 0} {
-                        lappend shared_users $email
-                    }
+            foreach user_info $user_list {
+                set email [lindex $user_info 1]
+                # Fallback to displayName if email is empty (preserves original behavior)
+                if {$email eq ""} {
+                    set email [lindex $user_info 0]
+                }
+                if {$email ne "" && [lsearch $shared_users $email] < 0} {
+                    lappend shared_users $email
                 }
             }
         }
@@ -2638,36 +2622,19 @@ proc has_explicit_user_permission {permissions target_user_lower} {
     # Check if any permission explicitly grants access to the target user
     # (non-inherited, non-owner)
     foreach perm $permissions {
-        # Skip owner permissions
         if {[is_owner_permission $perm]} {
             continue
         }
         
-        # Check if this permission is inherited
         if {[is_inherited_permission $perm]} {
             continue
         }
         
-        # Check direct user permissions
-        if {[dict exists $perm grantedTo user]} {
-            set user [dict get $perm grantedTo user]
-            set user_email [string tolower [dict get $user email]]
+        set user_list [extract_users_from_perm $perm]
+        foreach user_info $user_list {
+            set user_email [string tolower [lindex $user_info 1]]
             if {[string first $target_user_lower $user_email] >= 0} {
                 return 1
-            }
-        }
-        
-        # Check grantedToIdentities (OneDrive Business)
-        if {[dict exists $perm grantedToIdentities]} {
-            set identities [dict get $perm grantedToIdentities]
-            foreach identity $identities {
-                if {[dict exists $identity user]} {
-                    set user [dict get $identity user]
-                    set user_email [string tolower [dict get $user email]]
-                    if {[string first $target_user_lower $user_email] >= 0} {
-                        return 1
-                    }
-                }
             }
         }
     }
@@ -3761,3 +3728,4 @@ if {[info commands tk] ne ""} {
 } else {
     main $argc $argv
 }
+
