@@ -3347,7 +3347,12 @@ proc gui_fetch_acl {item_id remote_name} {
     gui_update_status "✅ Found $item_type" green
     
     # Clear existing treeview
-    gui_clear_treeview
+    if {[info exists tree] && $tree ne ""} {
+        foreach item [$tree children {}] {
+            $tree delete $item
+        }
+        gui_update_status "Treeview cleared" green
+    }
     
     # Get permissions using shared function
     gui_update_status "Getting ACL..." blue
@@ -3673,16 +3678,6 @@ if {[info commands tk] ne ""} {
         puts "STATUS ($color): $message"  ;# Still log to console for debugging
         if {[info exists status_label] && $status_label ne ""} {
             $status_label configure -text $message -foreground $color
-        }
-    }
-    
-    proc gui_clear_treeview {} {
-        global tree
-        if {[info exists tree] && $tree ne ""} {
-            foreach item [$tree children {}] {
-                $tree delete $item
-            }
-            gui_update_status "Treeview cleared" green
         }
     }
     
