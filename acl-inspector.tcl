@@ -552,65 +552,9 @@ proc update_status {message {color blue}} {
     puts "STATUS ($color): $message"
 }
 
-# Shared clear_treeview placeholder - GUI code should use gui_clear_treeview
-# This exists for compatibility with shared code that may call it
-proc clear_treeview {} {
-    # GUI code should use gui_clear_treeview instead
-    # CLI code doesn't have a treeview, so this does nothing
-}
-
 # ============================================================================
 # Recursive ACL Display Functions
 # ============================================================================
-
-proc get_user_role_from_permissions {permissions user_email} {
-    # Extract the role for a specific user from a permission list
-    # Returns: "write", "read", or ""
-    set user_email_lower [string tolower $user_email]
-    
-    foreach perm $permissions {
-        # Skip owner permissions
-        if {[is_owner_permission $perm]} {
-            continue
-        }
-        
-        # Check grantedTo user
-        if {[dict exists $perm grantedTo user]} {
-            set user [dict get $perm grantedTo user]
-            set email [string tolower [dict get $user email]]
-            if {$email eq $user_email_lower} {
-                set roles [dict get $perm roles]
-                if {[lsearch -exact $roles "write"] >= 0} {
-                    return "write"
-                } elseif {[lsearch -exact $roles "read"] >= 0} {
-                    return "read"
-                }
-                return [lindex $roles 0]
-            }
-        }
-        
-        # Check grantedToIdentities (OneDrive Business)
-        if {[dict exists $perm grantedToIdentities]} {
-            set identities [dict get $perm grantedToIdentities]
-            foreach identity $identities {
-                if {[dict exists $identity user]} {
-                    set user [dict get $identity user]
-                    set email [string tolower [dict get $user email]]
-                    if {$email eq $user_email_lower} {
-                        set roles [dict get $perm roles]
-                        if {[lsearch -exact $roles "write"] >= 0} {
-                            return "write"
-                        } elseif {[lsearch -exact $roles "read"] >= 0} {
-                            return "read"
-                        }
-                        return [lindex $roles 0]
-                    }
-                }
-            }
-        }
-    }
-    return ""
-}
 
 proc extract_users_from_permissions {permissions} {
     # Extract all non-owner users from permissions
