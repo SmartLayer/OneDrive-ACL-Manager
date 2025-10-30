@@ -50,13 +50,13 @@ wish acl-inspector.tcl [item_path] [remote_name]
 
 ### Command Line Mode
 
-The CLI uses a path-first interface for auditing access across folder hierarchies:
+The CLI uses standard option-first interface for auditing access across folder hierarchies:
 
 ```bash
-tclsh acl-inspector.tcl [PATH] [OPTIONS]
+tclsh acl-inspector.tcl [OPTIONS] [PATH]
 ```
 
-**PATH**: Folder or file to inspect (default: `/` - root)
+**PATH**: Folder or file to inspect (default: `/` - root) - must come after all options
 
 **Core Options:**
 - `-r, --recursive` - **Scan folder and all subfolders** (default max-depth: 3) - Use this for complete access audits
@@ -80,16 +80,16 @@ tclsh acl-inspector.tcl [PATH] [OPTIONS]
 # ==================== RECURSIVE AUDITING (Primary Use Cases) ====================
 
 # Audit who has access to Financial folder and ALL subfolders
-tclsh acl-inspector.tcl "Finance" -r
+tclsh acl-inspector.tcl -r "Finance"
 
 # Deep audit with custom depth (e.g., for complex hierarchies)
-tclsh acl-inspector.tcl "Projects" -r --max-depth 10
+tclsh acl-inspector.tcl -r --max-depth 10 "Projects"
 
 # Audit including both folders AND files
-tclsh acl-inspector.tcl "Confidential" -r --type both
+tclsh acl-inspector.tcl -r --type both "Confidential"
 
 # Find everywhere an ex-employee still has access
-tclsh acl-inspector.tcl "Company" --only-user exemployee@example.com -r
+tclsh acl-inspector.tcl --only-user exemployee@example.com -r "Company"
 
 # ==================== SINGLE-ITEM OPERATIONS ====================
 
@@ -97,23 +97,23 @@ tclsh acl-inspector.tcl "Company" --only-user exemployee@example.com -r
 tclsh acl-inspector.tcl "Finance/Budget2025"
 
 # Check if specific user has access to one folder
-tclsh acl-inspector.tcl "Finance/Budget2025" --only-user bob@example.com
+tclsh acl-inspector.tcl --only-user bob@example.com "Finance/Budget2025"
 
 # ==================== REMEDIATION OPERATIONS ====================
 
 # Remove ex-employee from entire hierarchy (dry run first!)
-tclsh acl-inspector.tcl "Projects" --remove-user exemployee@example.com -r --dry-run
+tclsh acl-inspector.tcl --remove-user exemployee@example.com -r --dry-run "Projects"
 
 # Actually remove after reviewing dry-run output
-tclsh acl-inspector.tcl "Projects" --remove-user exemployee@example.com -r
+tclsh acl-inspector.tcl --remove-user exemployee@example.com -r "Projects"
 
 # ==================== GRANTING ACCESS ====================
 
 # Invite user to folder (automatically inherited by subfolders)
-tclsh acl-inspector.tcl "Finance" --invite newaccountant@example.com
+tclsh acl-inspector.tcl --invite newaccountant@example.com "Finance"
 
 # Invite with read-only access
-tclsh acl-inspector.tcl "Reports" --invite auditor@example.com --read-only
+tclsh acl-inspector.tcl --invite auditor@example.com --read-only "Reports"
 
 # ==================== GUI MODE ====================
 
