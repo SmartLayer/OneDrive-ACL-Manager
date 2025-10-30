@@ -567,40 +567,6 @@ proc clear_treeview {} {
     # CLI code doesn't have a treeview, so this does nothing
 }
 
-proc display_acl_cli {permissions item_id} {
-    set perm_count [llength $permissions]
-    puts "\n=== ACL Information ==="
-    puts "Folder ID: $item_id"
-    puts "Found $perm_count permission(s):"
-    puts ""
-    
-    # Print table header
-    puts [format "%-4s %-15s %-25s %-30s" "No." "Role" "User" "Email"]
-    puts [string repeat "-" 80]
-    
-    set perm_num 1
-    foreach perm $permissions {
-        set roles [dict get $perm roles]
-        set roles_str [join $roles ", "]
-        
-        # Get user information
-        lassign [extract_user_info $perm] user_name user_email
-        
-        # Truncate long names/emails for table format
-        if {[string length $user_name] > 24} {
-            set user_name "[string range $user_name 0 21]..."
-        }
-        if {[string length $user_email] > 29} {
-            set user_email "[string range $user_email 0 26]..."
-        }
-        
-        puts [format "%-4d %-15s %-25s %-30s" $perm_num $roles_str $user_name $user_email]
-        
-        incr perm_num
-    }
-    puts ""
-}
-
 # ============================================================================
 # Recursive ACL Display Functions
 # ============================================================================
@@ -825,8 +791,8 @@ proc detect_special_folders {all_folders root_users_dict} {
     return $special_folders
 }
 
-proc display_recursive_acl {root_path root_permissions all_folders max_depth} {
-    # Display ACL information in a user-centric recursive format
+proc print_recursive_acl {root_path root_permissions all_folders max_depth} {
+    # Print ACL information in a user-centric recursive format
     # Shows: 1) Root permissions, 2) Additional users in subfolders, 3) Special folders
     
     set root_users_dict [extract_users_from_permissions $root_permissions]
@@ -3666,7 +3632,7 @@ proc main {argc argv} {
             set root_permissions [dict get $root_folder permissions]
             
             # Display using new recursive format
-            display_recursive_acl $path $root_permissions $all_folders $max_depth
+            print_recursive_acl $path $root_permissions $all_folders $max_depth
         } else {
             puts "❌ No folders found or unable to access permissions"
         }
