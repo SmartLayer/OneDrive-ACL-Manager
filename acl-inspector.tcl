@@ -537,18 +537,6 @@ proc build_graph_api_url {endpoint} {
     return "https://graph.microsoft.com/v1.0$endpoint"
 }
 
-proc get_item_url_from_path {path} {
-    # Get Microsoft Graph API URL for an item by path
-    # Handles root path and regular paths with proper URL encoding
-    # Returns: Full Graph API URL for the item
-    if {$path eq "/" || $path eq ""} {
-        return [build_graph_api_url "/me/drive/root"]
-    } else {
-        set encoded_path [url_encode $path]
-        return [build_graph_api_url "/me/drive/root:/$encoded_path"]
-    }
-}
-
 # ============================================================================
 # Core Functions
 # ============================================================================
@@ -2839,7 +2827,14 @@ proc cli_path_to_item_id_and_dict {path access_token} {
     # Handles all error messaging internally
     # THIS FUNCTION ONLY EXISTS IN CLI MODE - CANNOT BE CALLED FROM GUI
     
-    set item_url [get_item_url_from_path $path]
+    # Build item URL from path (inlined from get_item_url_from_path)
+    if {$path eq "/" || $path eq ""} {
+        set item_url [build_graph_api_url "/me/drive/root"]
+    } else {
+        set encoded_path [url_encode $path]
+        set item_url [build_graph_api_url "/me/drive/root:/$encoded_path"]
+    }
+    
     set headers [list Authorization "Bearer $access_token"]
     set result [make_http_request $item_url $headers]
     set status [lindex $result 0]
@@ -3275,15 +3270,14 @@ proc gui_fetch_acl {item_id remote_name} {
     
     set item_name [dict get $item_dict name]
     set item_type [expr {[dict exists $item_dict folder] ? "folder" : "file"}]
-    set item_path [get_item_path $item_id $access_token]
     
     # Store current item ID for edit operations
     set current_item_id $item_id
     
-    # Update ACL path label
+    # Update ACL path label with item name (no path lookup needed - GUI works with IDs only)
     $acl_path_label configure -state normal
     $acl_path_label delete 0 end
-    $acl_path_label insert 0 $item_path
+    $acl_path_label insert 0 $item_name
     $acl_path_label configure -state readonly
     
     gui_update_status "✅ Found $item_type: $item_name (ID: $item_id)" green
