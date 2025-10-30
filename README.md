@@ -1,6 +1,6 @@
 # OneDrive ACL Manager (TCL Version)
 
-A TCL/Tk-based tool for auditing and managing Access Control Lists (ACLs) across OneDrive folder hierarchies using the Microsoft Graph API with OAuth tokens from rclone configuration.
+A TCL/Tk-based tool for auditing and managing Access Control Lists (ACLs) across OneDrive folder hierarchies using the Microsoft Graph API with OAuth authentication.
 
 ## Primary Use Case
 
@@ -15,7 +15,7 @@ A TCL/Tk-based tool for auditing and managing Access Control Lists (ACLs) across
 - Remove user permissions recursively with dry-run mode
 - Invite users to folders with inherited permissions
 - Dual interface: GUI (Tcl/Tk) and command-line
-- Direct API access using rclone OAuth tokens
+- Dual token system: Uses both rclone configuration and token.json for flexible authentication
 
 ## Prerequisites
 
@@ -126,7 +126,14 @@ wish acl-inspector.tcl "Finance"
 - **Read operations** (scanning, listing ACLs): Requires `Files.Read` (standard OneDrive token)
 - **Write operations** (inviting users, removing permissions): Requires `Files.ReadWrite` + `Sites.Manage.All`
 
-Note: The default rclone OneDrive token typically has read-only access. For write operations, you may need to reconfigure rclone with additional permissions.
+**Token Sources:**
+
+The application uses two token sources:
+
+1. **rclone.conf**: Read-only tokens from your rclone configuration (typically `Files.Read` scope)
+2. **token.json**: Full-permission tokens stored in the application directory (created automatically when needed)
+
+For write operations, the application will automatically request web-based authentication to create or update `token.json` with the required permissions. The application prioritises `token.json` when available and falls back to rclone.conf for read-only operations.
 
 ## Key Features
 
@@ -161,10 +168,14 @@ The tool is designed for comprehensive access audits across folder hierarchies. 
 ## Troubleshooting
 
 **Token expired:**
-```bash
-# Refresh token by running any rclone command
-rclone about OneDrive:
-```
+
+The application automatically refreshes expired tokens when possible. If automatic refresh fails:
+
+- For `token.json`: Run the script in GUI mode and perform any write operation to trigger web-based re-authentication
+- For rclone.conf: Refresh by running any rclone command:
+  ```bash
+  rclone about OneDrive:
+  ```
 
 **Package errors:**
 ```bash
@@ -186,12 +197,13 @@ Uses Microsoft Graph API endpoints:
 - `POST /me/drive/items/{item-id}/invite` - Invite users
 - `DELETE /me/drive/items/{item-id}/permissions/{perm-id}` - Remove permissions
 
-OAuth token is extracted from `~/.config/rclone/rclone.conf` and used directly in API requests.
+OAuth tokens are obtained from either `token.json` (full permissions) or the rclone configuration file (read-only fallback) and used directly in API requests. The rclone configuration path is platform-specific: Windows uses `%APPDATA%\rclone\rclone.conf`, while Unix-like systems use `~/.config/rclone/rclone.conf`.
 
 ## Security Notes
 
-- OAuth token is read from rclone.conf (not stored by this script)
-- Tokens expire and can be refreshed by running any rclone command
+- OAuth tokens are read from rclone.conf and token.json
+- The application automatically creates and updates `token.json` when higher permissions are needed (via web-based OAuth flow)
+- Tokens expire and are automatically refreshed when possible
 - The script can read ACL information and modify permissions; use with appropriate caution
 - Permission removal operations require confirmation (cannot be bypassed)
 - Always use `--dry-run` first when removing permissions
