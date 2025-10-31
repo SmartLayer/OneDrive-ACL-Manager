@@ -165,6 +165,9 @@ if {[info commands tk] ne ""} {
     pack $action_buttons_frame.remove -side left -padx 2
     pack $action_buttons_frame.invite -side left -padx 2
 
+    # Global status label (shows status for all operations)
+    pack [ttk::label $f.status -text "Ready" -foreground blue] -fill x -pady {5 5}
+
     # ACL display section (lower half)
     pack [ttk::frame $f.acl] -fill both -expand yes
 
@@ -175,10 +178,6 @@ if {[info commands tk] ne ""} {
     set acl_path_label [ttk::entry $f.acl.path.entry]
     pack $acl_path_label -side left -fill x -expand yes -padx {5 0}
     $acl_path_label configure -state readonly
-
-    # Status label
-    set status_label [ttk::label $f.acl.status -text "Ready" -foreground blue]
-    pack $status_label -fill x -pady {0 10}
 
     # Create treeview frame
     pack [ttk::frame $f.acl.tree] -fill both -expand yes
@@ -1780,9 +1779,9 @@ proc cleanup_oauth_server {} {
     }
 }
 
-proc oauth_modal_start_browser_auth {modal_window status_label browser_btn reload_btn} {
+proc oauth_modal_start_browser_auth {modal_window browser_btn reload_btn} {
     # Start browser authentication when user clicks the button
-    debug_log "oauth_modal_start_browser_auth called with args: modal=$modal_window, status=$status_label, browser_btn=$browser_btn, reload_btn=$reload_btn"
+    debug_log "oauth_modal_start_browser_auth called with args: modal=$modal_window, browser_btn=$browser_btn, reload_btn=$reload_btn"
     
     global oauth oauth_modal_result
     if {[info exists oauth_modal_result]} {
@@ -1799,14 +1798,16 @@ proc oauth_modal_start_browser_auth {modal_window status_label browser_btn reloa
         debug_log "Error info: $::errorInfo"
     }
     
+    set status_widget $modal_window.f.status
+    
     # Disable browser button (can't start twice)
     $browser_btn configure -state disabled
-    $status_label configure -text "Starting OAuth server..." -foreground blue
+    $status_widget configure -text "Starting OAuth server..." -foreground blue
     update
     
     # Start local server
     if {[oauth_start_local_server] eq ""} {
-        $status_label configure -text "Failed to start OAuth server" -foreground red
+        $status_widget configure -text "Failed to start OAuth server" -foreground red
         $browser_btn configure -state normal
         return
     }
@@ -1814,7 +1815,7 @@ proc oauth_modal_start_browser_auth {modal_window status_label browser_btn reloa
     # Build auth URL
     set auth_url [oauth_build_auth_url]
     
-    $status_label configure -text "Opening browser for authentication..." -foreground blue
+    $status_widget configure -text "Opening browser for authentication..." -foreground blue
     update
     
     # Open browser (platform-specific)
@@ -1827,21 +1828,21 @@ proc oauth_modal_start_browser_auth {modal_window status_label browser_btn reloa
             exec xdg-open $auth_url &
         }
     } error]} {
-        $status_label configure -text "Error opening browser: $error" -foreground red
+        $status_widget configure -text "Error opening browser: $error" -foreground red
         cleanup_oauth_server
         $browser_btn configure -state normal
         return
     }
     
-    $status_label configure -text "Waiting for authentication in browser..." -foreground blue
+    $status_widget configure -text "Waiting for authentication in browser..." -foreground blue
     update
     
     # Start non-blocking completion checker
     set start_time [clock milliseconds]
-    after 100 [list oauth_modal_check_completion $modal_window $status_label $start_time]
+    after 100 [list oauth_modal_check_completion $modal_window $start_time]
 }
 
-proc oauth_modal_check_completion {modal_window status_label start_time} {
+proc oauth_modal_check_completion {modal_window start_time} {
     # Non-blocking periodic check of OAuth completion status
     # Called via 'after' to avoid blocking the event loop
     global oauth oauth_modal_result
@@ -1854,6 +1855,8 @@ proc oauth_modal_check_completion {modal_window status_label start_time} {
         return
     }
     
+    set status_widget $modal_window.f.status
+    
     # Check OAuth status
     if {$oauth(auth_code) ne ""} {
         if {$oauth(auth_code) eq "CANCELLED"} {
@@ -1865,7 +1868,7 @@ proc oauth_modal_check_completion {modal_window status_label start_time} {
             return
         } else {
             # Got auth code - proceed to token exchange
-            $status_label configure -text "Exchanging authorization code for token..." -foreground blue
+            $status_widget configure -text "Exchanging authorization code for token..." -foreground blue
             update
             
             if {[catch {
@@ -1885,7 +1888,7 @@ proc oauth_modal_check_completion {modal_window status_label start_time} {
                 wm protocol $modal_window WM_DELETE_WINDOW {}
                 destroy $modal_window
             } error]} {
-                $status_label configure -text "Token exchange failed: $error" -foreground red
+                $status_widget configure -text "Token exchange failed: $error" -foreground red
                 set oauth(auth_code) ""
                 cleanup_oauth_server
                 after 2500 [list destroy $modal_window]
@@ -1898,7 +1901,7 @@ proc oauth_modal_check_completion {modal_window status_label start_time} {
     # Check timeout (120 seconds)
     set elapsed [expr {[clock milliseconds] - $start_time}]
     if {$elapsed > 120000} {
-        $status_label configure -text "Authentication timeout - please try again or reload token file" -foreground red
+        $status_widget configure -text "Authentication timeout - please try again or reload token file" -foreground red
         cleanup_oauth_server
         # Don't close on timeout - let user try reload or close manually
         return
@@ -1906,15 +1909,15 @@ proc oauth_modal_check_completion {modal_window status_label start_time} {
     
     # Update status with elapsed time
     set seconds [expr {$elapsed / 1000}]
-    $status_label configure -text "Waiting for browser authentication... ($seconds/120 seconds)" -foreground blue
+    $status_widget configure -text "Waiting for browser authentication... ($seconds/120 seconds)" -foreground blue
     
     # Schedule next check
-    after 100 [list oauth_modal_check_completion $modal_window $status_label $start_time]
+    after 100 [list oauth_modal_check_completion $modal_window $start_time]
 }
 
-proc oauth_modal_reload_token {modal_window status_label reload_btn} {
+proc oauth_modal_reload_token {modal_window reload_btn} {
     # Handle token reload from file with validation
-    debug_log "oauth_modal_reload_token called with args: modal=$modal_window, status=$status_label, reload_btn=$reload_btn"
+    debug_log "oauth_modal_reload_token called with args: modal=$modal_window, reload_btn=$reload_btn"
     
     global oauth remote_entry token_capability oauth_modal_result
     if {[info exists oauth_modal_result]} {
@@ -1931,21 +1934,23 @@ proc oauth_modal_reload_token {modal_window status_label reload_btn} {
         debug_log "Error info: $::errorInfo"
     }
     
+    set status_widget $modal_window.f.status
+    
     # Disable button during check
     $reload_btn configure -state disabled
-    $status_label configure -text "Checking token.json file..." -foreground blue
+    $status_widget configure -text "Checking token.json file..." -foreground blue
     update
     
     # Check for race condition - auth already completing
     if {[info exists oauth(auth_code)] && $oauth(auth_code) ne "" && $oauth(auth_code) ne "CANCELLED"} {
-        $status_label configure -text "Browser authentication already completing..." -foreground orange
+        $status_widget configure -text "Browser authentication already completing..." -foreground orange
         $reload_btn configure -state normal
         return
     }
     
     # Try to load token
     if {![file exists "./token.json"]} {
-        $status_label configure -text "Error: token.json file not found in current directory" -foreground red
+        $status_widget configure -text "Error: token.json file not found in current directory" -foreground red
         $reload_btn configure -state normal
         return
     }
@@ -1980,7 +1985,7 @@ proc oauth_modal_reload_token {modal_window status_label reload_btn} {
         
     } error]} {
         # Failed to load valid token
-        $status_label configure -text "Error: $error" -foreground red
+        $status_widget configure -text "Error: $error" -foreground red
         $reload_btn configure -state normal
     }
 }
@@ -2067,14 +2072,11 @@ proc show_oauth_modal_dialog {} {
     pack $reload_btn -pady 5 -anchor center
     
     # Status label (shows progress after user clicks a button)
-    set status_label [ttk::label $f.status \
-        -text "" \
-        -foreground blue -justify center]
-    pack $status_label -pady {10 10}
+    pack [ttk::label $f.status -text "" -foreground blue -justify center] -pady {10 10}
     
-    # Configure button commands after creating status_label
-    $browser_btn configure -command [list oauth_modal_start_browser_auth $modal $status_label $browser_btn $reload_btn]
-    $reload_btn configure -command [list oauth_modal_reload_token $modal $status_label $reload_btn]
+    # Configure button commands after creating status label
+    $browser_btn configure -command [list oauth_modal_start_browser_auth $modal $browser_btn $reload_btn]
+    $reload_btn configure -command [list oauth_modal_reload_token $modal $reload_btn]
     
     # Wait for dialog to close (modal loop)
     tkwait window $modal
@@ -3656,10 +3658,10 @@ if {[info commands tk] ne ""} {
     
     # GUI-specific status and treeview functions
     proc gui_update_status {message color} {
-        global status_label
+        global f
         puts "STATUS ($color): $message"  ;# Still log to console for debugging
-        if {[info exists status_label] && $status_label ne ""} {
-            $status_label configure -text $message -foreground $color
+        if {[info exists f] && [winfo exists $f.status]} {
+            $f.status configure -text $message -foreground $color
         }
     }
     
