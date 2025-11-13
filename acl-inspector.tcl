@@ -392,7 +392,7 @@ proc populate_column {col_index folder_id} {
 
 proc on_column_item_click {col_index widget y_coord} {
     # Handle click on an item in a column
-    global column_data selected_item url_entry fetch_button
+    global column_data selected_item url_entry fetch_button action_buttons_frame
     
     # Get the index of the clicked item
     set item_index [$widget nearest $y_coord]
@@ -429,8 +429,9 @@ proc on_column_item_click {col_index widget y_coord} {
     $url_entry insert 0 "https://onedrive.live.com/?id=$item_id"
     $url_entry configure -state readonly
     
-    # Enable fetch button
+    # Enable fetch button and invite button (both work with item ID)
     $fetch_button configure -state normal
+    $action_buttons_frame.invite configure -state normal
     
     # If it's a folder, destroy columns after this one and create a new column
     if {$is_folder} {
@@ -3351,17 +3352,6 @@ proc gui_fetch_acl {item_id remote_name} {
     
     set perm_count [llength $permissions]
     
-    if {$perm_count == 0} {
-        gui_update_status "ℹ️ No permissions found for this item (empty ACL)" orange
-        return
-    }
-    
-    gui_update_status "✅ Found $perm_count permission(s) in ACL (Token: $capability)" green
-    
-    # Enable action buttons now that we have an item selected
-    $action_buttons_frame.invite configure -state normal
-    $action_buttons_frame.remove configure -state disabled  ;# Will be enabled when user selects items
-    
     # Bind treeview selection event to enable/disable Remove button
     bind $f.acl.tree.list <<TreeviewSelect>> {
         global action_buttons_frame f
@@ -3372,6 +3362,13 @@ proc gui_fetch_acl {item_id remote_name} {
             $action_buttons_frame.remove configure -state disabled
         }
     }
+    
+    if {$perm_count == 0} {
+        gui_update_status "ℹ️ No permissions found for this item (empty ACL)" orange
+        return
+    }
+    
+    gui_update_status "✅ Found $perm_count permission(s) in ACL (Token: $capability)" green
     
     # Populate treeview (filter out owner permissions)
     set perm_num 1
