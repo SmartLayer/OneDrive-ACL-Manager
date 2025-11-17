@@ -1792,14 +1792,14 @@ proc oauth_modal_start_browser_auth {modal_window browser_btn reload_btn} {
     }
     
     if {[catch {
-        set oauth_modal_result 0  # Default to failure
+        set oauth_modal_result 0
         debug_log "Successfully set oauth_modal_result to 0"
     } err]} {
         debug_log "ERROR setting oauth_modal_result: $err"
         debug_log "Error info: $::errorInfo"
     }
     
-    set status_widget $modal_window.f.status
+    set status_widget $modal_window.main.status
     
     # Disable browser button (can't start twice)
     $browser_btn configure -state disabled
@@ -1856,7 +1856,7 @@ proc oauth_modal_check_completion {modal_window start_time} {
         return
     }
     
-    set status_widget $modal_window.f.status
+    set status_widget $modal_window.main.status
     
     # Check OAuth status
     if {$oauth(auth_code) ne ""} {
@@ -1928,14 +1928,14 @@ proc oauth_modal_reload_token {modal_window reload_btn} {
     }
     
     if {[catch {
-        set oauth_modal_result 0  # Default to failure
+        set oauth_modal_result 0
         debug_log "Successfully set oauth_modal_result to 0"
     } err]} {
         debug_log "ERROR setting oauth_modal_result: $err"
         debug_log "Error info: $::errorInfo"
     }
     
-    set status_widget $modal_window.f.status
+    set status_widget $modal_window.main.status
     
     # Disable button during check
     $reload_btn configure -state disabled
@@ -3648,6 +3648,16 @@ proc main {argc argv} {
 if {[info commands tk] ne ""} {
     package require Tk
     package require Ttk
+
+    # ========================================================================
+    # GUI MODE - Parse command line arguments
+    # ========================================================================
+    
+    # Check for -debug flag in GUI mode
+    global debug_mode argc argv
+    if {[lsearch -exact $argv "-debug"] != -1} {
+        set debug_mode 1
+    }
 
     # ========================================================================
     # GUI MODE FUNCTIONS
