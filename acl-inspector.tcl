@@ -73,15 +73,13 @@ set url_entry ""
 set action_buttons_frame ""
 
 # Treeview browser variables
-set browser_tree ""       ;# Browser treeview widget reference
-set acl_tree ""           ;# ACL display treeview widget reference
 set selected_item {}      ;# Currently selected item {id is_folder}
 set fetch_button ""       ;# Fetch ACL button widget
 set acl_path_label ""     ;# Label showing path of current ACL display
 
 if {[info commands tk] ne ""} {
     # Declare global widget variables
-    global remote_entry url_entry fetch_button acl_path_label browser_tree acl_tree selected_item action_buttons_frame f
+    global remote_entry url_entry fetch_button acl_path_label selected_item action_buttons_frame f
     
     # Create main window
     wm title . "OneDrive ACL Lister"
@@ -107,6 +105,14 @@ if {[info commands tk] ne ""} {
         destroy .
     }
 
+    # Helper function to configure treeview columns
+    proc configure_tree_columns {tree columns} {
+        foreach {col_id heading width minwidth} $columns {
+            $tree heading $col_id -text $heading
+            $tree column $col_id -width $width -minwidth $minwidth
+        }
+    }
+
     # Create main frame
     set f [ttk::frame .main]
     pack $f -fill both -expand yes -padx 10 -pady 10
@@ -128,17 +134,13 @@ if {[info commands tk] ne ""} {
     $remote_entry insert 0 "OneDrive"
     # Don't pack this - it's hidden
 
-    # ========================================================================
     # MAIN CONTENT: Left-Right Split Layout
-    # ========================================================================
 
     # Create horizontal panedwindow for left-middle-right layout
     pack [ttk::panedwindow $f.paned -orient horizontal] -fill both -expand yes -pady {0 10}
 
-    # ========================================================================
     # LEFT PANE: Browser
-    # ========================================================================
-    set left_frame [ttk::frame $f.paned.left]
+    set left_frame [ttk::frame $f.paned.browser]
     $f.paned add $left_frame -weight 1
 
     ttk::label $left_frame.label -text "Browse OneDrive:"
@@ -168,10 +170,8 @@ if {[info commands tk] ne ""} {
     set root_item [$browser_tree insert {} end -text "📁 OneDrive Root" -values [list "root" "folder" 0]]
     $browser_tree insert $root_item end -text ""  ;# Dummy child for expand arrow
 
-    # ========================================================================
     # RIGHT PANE: ACL Display
-    # ========================================================================
-    set right_frame [ttk::frame $f.paned.right]
+    set right_frame [ttk::frame $f.paned.acl]
     $f.paned add $right_frame -weight 2
 
     # Set initial sash position after window is mapped (gives 35% to left, 65% to right)
@@ -213,29 +213,16 @@ if {[info commands tk] ne ""} {
     pack $acl_tree -side left -fill both -expand yes
 
     # Configure treeview columns (reduced minwidths for better initial sizing)
-    $acl_tree heading #0 -text ""
-    $acl_tree column #0 -width 60 -minwidth 40
-
-    $acl_tree heading id -text "ID"
-    $acl_tree column id -width 150 -minwidth 80
-
-    $acl_tree heading roles -text "Roles"
-    $acl_tree column roles -width 70 -minwidth 50
-
-    $acl_tree heading user -text "User"
-    $acl_tree column user -width 120 -minwidth 80
-
-    $acl_tree heading email -text "Email"
-    $acl_tree column email -width 150 -minwidth 100
-
-    $acl_tree heading link_type -text "Link Type"
-    $acl_tree column link_type -width 70 -minwidth 50
-
-    $acl_tree heading link_scope -text "Link Scope"
-    $acl_tree column link_scope -width 70 -minwidth 50
-
-    $acl_tree heading expires -text "Expires"
-    $acl_tree column expires -width 100 -minwidth 80
+    configure_tree_columns $acl_tree {
+        #0 "" 60 40
+        id "ID" 150 80
+        roles "Roles" 70 50
+        user "User" 120 80
+        email "Email" 150 100
+        link_type "Link Type" 70 50
+        link_scope "Link Scope" 70 50
+        expires "Expires" 100 80
+    }
 
     # Configure tags for different permission types
     $acl_tree tag configure owner -background lightgreen
@@ -252,9 +239,7 @@ if {[info commands tk] ne ""} {
     pack $action_buttons_frame.remove -side left -padx 2
     pack $action_buttons_frame.invite -side left -padx 2
 
-    # ========================================================================
     # BOTTOM: Status Label
-    # ========================================================================
     pack [ttk::label $f.status -text "Ready" -foreground blue] -fill x -pady {5 5}
 
     # Fix Treeview row height to match font (prevents text clipping on Linux HiDPI)
@@ -390,21 +375,18 @@ proc load_tree_children {tree parent_item folder_id} {
 }
 
 proc gui_clear_acl_display {} {
-    # Clear the ACL display treeview and reset the item label
-    global acl_tree acl_path_label action_buttons_frame
+    global f acl_path_label action_buttons_frame
 
-    # Clear ACL treeview
+    set acl_tree $f.paned.acl.tree.list
     foreach item [$acl_tree children {}] {
         $acl_tree delete $item
     }
 
-    # Clear ACL path label
     $acl_path_label configure -state normal
     $acl_path_label delete 0 end
     $acl_path_label insert 0 "(No ACL loaded - click Fetch ACL)"
     $acl_path_label configure -state readonly
 
-    # Disable action buttons until ACL is fetched
     $action_buttons_frame.remove configure -state disabled
     $action_buttons_frame.invite configure -state disabled
 
@@ -412,7 +394,6 @@ proc gui_clear_acl_display {} {
 }
 
 proc on_tree_select {tree} {
-    # Handle selection of an item in the treeview
     global selected_item url_entry fetch_button
 
     set selection [$tree selection]
@@ -2331,8 +2312,8 @@ proc ensure_edit_capability {} {
 
 proc on_invite_user_click {} {
     # Show dialog to invite a user
-    global current_item_id remote_entry f acl_tree
-    set tree $acl_tree
+    global current_item_id remote_entry f
+    set tree $f.paned.acl.tree.list
     
     if {$current_item_id eq ""} {
         tk_messageBox -type ok -icon warning -title "No Item Selected" \
@@ -2427,8 +2408,8 @@ proc on_invite_user_click {} {
 
 proc on_remove_selected_click {} {
     # Remove selected permissions from treeview
-    global f current_item_id remote_entry acl_tree
-    set tree $acl_tree
+    global f current_item_id remote_entry
+    set tree $f.paned.acl.tree.list
     
     if {$current_item_id eq ""} {
         tk_messageBox -type ok -icon warning -title "No Item Selected" \
@@ -3282,7 +3263,8 @@ proc fetch_permissions_by_id {item_id access_token} {
 
 # GUI wrapper: Fetch ACL and update GUI widgets
 proc gui_fetch_acl {item_id remote_name} {
-    global f current_item_id token_capability action_buttons_frame acl_path_label acl_tree
+    global f current_item_id token_capability action_buttons_frame acl_path_label
+    set acl_tree $f.paned.acl.tree.list
     
     if {$item_id eq ""} {
         gui_update_status "Error: Invalid item ID" red
@@ -3351,14 +3333,12 @@ proc gui_fetch_acl {item_id remote_name} {
     $acl_path_label configure -state readonly
     
     gui_update_status "✅ Found $item_type" green
-    
-    # Clear existing treeview
+
     foreach item [$acl_tree children {}] {
         $acl_tree delete $item
     }
     gui_update_status "Treeview cleared" green
-    
-    # Get permissions using shared function
+
     gui_update_status "Getting ACL..." blue
     set perm_result [fetch_permissions_by_id $item_id $access_token]
     set perm_status [lindex $perm_result 0]
@@ -3373,7 +3353,8 @@ proc gui_fetch_acl {item_id remote_name} {
     
     # Bind treeview selection event to enable/disable Remove button
     bind $acl_tree <<TreeviewSelect>> {
-        global action_buttons_frame acl_tree
+        global f action_buttons_frame
+        set acl_tree $f.paned.acl.tree.list
         set selection [$acl_tree selection]
         if {[llength $selection] > 0} {
             $action_buttons_frame.remove configure -state normal
@@ -3671,9 +3652,7 @@ if {[info commands tk] ne ""} {
     package require Tk
     package require Ttk
 
-    # ========================================================================
     # GUI MODE - Parse command line arguments
-    # ========================================================================
     
     # Check for -debug flag in GUI mode
     global debug_mode argc argv
@@ -3681,9 +3660,7 @@ if {[info commands tk] ne ""} {
         set debug_mode 1
     }
 
-    # ========================================================================
     # GUI MODE FUNCTIONS
-    # ========================================================================
     
     # GUI-specific status and treeview functions
     proc gui_update_status {message color} {
@@ -3697,9 +3674,7 @@ if {[info commands tk] ne ""} {
     # Update gui_fetch_acl to use GUI-specific functions
     # (We'll replace all update_status/clear_treeview calls)
     
-    # ========================================================================
     # GUI INITIALIZATION
-    # ========================================================================
     
     # GUI mode - Initialize browser with root folder
     gui_update_status "OneDrive ACL Lister - Ready to browse and fetch ACL information" blue
