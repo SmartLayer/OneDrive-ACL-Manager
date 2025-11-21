@@ -227,6 +227,7 @@ if {[info commands tk] ne ""} {
 
     # Treeview widget (with multi-select enabled)
     set acl_tree [ttk::treeview $right_frame.tree.list -columns {user roles id link_type link_scope expires} -show {tree headings} -selectmode extended \
+        -displaycolumns {user roles link_type link_scope expires} \
         -yscrollcommand "$right_frame.tree.vscroll set" -xscrollcommand "$right_frame.tree.hscroll set"]
     pack $acl_tree -side left -fill both -expand yes
 
@@ -235,7 +236,6 @@ if {[info commands tk] ne ""} {
         #0 "Email" 150 100
         user "User" 120 80
         roles "Roles" 70 50
-        id "ID" 0 0
         link_type "Link Type" 70 50
         link_scope "Link Scope" 70 50
         expires "Expires" 100 80
