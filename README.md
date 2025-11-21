@@ -1,28 +1,40 @@
 # OneDrive ACL Manager (TCL Version)
 
-A TCL/Tk-based tool for auditing and managing Access Control Lists (ACLs) across OneDrive folder hierarchies using the Microsoft Graph API with OAuth authentication.
+## Does This Sound Familiar?
 
-## Primary Use Case
+If you've shared your OneDrive folders with friends, family, or collaborators over the years and you've lost track of who has access to what...
 
-**Recursive ACL Auditing**: When management asks "Who has access to our Financial folder?", you need to scan not just the top-level folder, but all subfolders. A terminated employee might have been granted access to specific subfolders while lacking access to the parent - a common security oversight. This tool recursively scans entire folder hierarchies to ensure complete visibility of access permissions.
+If you've stopped working with someone and you're worried they might still have access to your personal files somewhere deep in your folder structure...
+
+If you need to know "Who can see my tax documents?" or "Who has access to my family photos?" and you can't get a clear answer...
+
+If you're trying to clean up your OneDrive and need to audit who can see what before sharing more files...
+
+**You need this tool.**
+
+## The Problem
+
+OneDrive shows you permissions for each folder, but not what's in the subfolders below. Someone you shared a subfolder with years ago might still have access - and you won't know unless you check every folder manually.
+
+## The Solution
+
+**OneDrive ACL Manager** scans entire folder hierarchies in one go, showing you all permissions at every level. Finally answer: "Who has access to what?"
 
 ## Features
 
-- **Recursive ACL scanning** - Audit complete folder hierarchies to find all access grants
-- List permissions for OneDrive items at any depth
-- Scan folders and files with smart pruning for inherited permissions
+**Dual Interface - Choose Your Workflow:**
+
+- **GUI Mode (Tcl/Tk)** - Interactive browsing for exploring folders and viewing permissions visually (subset of command-line functions)
+- **Command-line Mode** - Full feature set including recursive operations for auditing entire hierarchies (e.g., locate all files accessible by a given user, remove permissions across folder trees)
+
+**Core Capabilities:**
+
+- Recursive ACL scanning - Audit complete folder hierarchies to find all access grants
 - Find items explicitly shared with specific users across folder trees
 - Remove user permissions recursively with dry-run mode
 - Invite users to folders with inherited permissions
-- Dual interface: GUI (Tcl/Tk) and command-line
+- Scan folders and files with smart pruning for inherited permissions
 - Dual token system: Uses both rclone configuration and token.json for flexible authentication
-
-## Prerequisites
-
-- Tcl/Tk 8.6+
-- rclone installed and configured with OneDrive remote
-- `tcllib` package (includes `json`)
-- `tcl-tls` package for HTTPS requests
 
 ## Installation: Windows
 
@@ -158,34 +170,10 @@ The application uses two token sources:
 
 For write operations, the application will automatically request web-based authentication to create or update `token.json` with the required permissions. The application prioritises `token.json` when available and falls back to rclone.conf for read-only operations.
 
-## Key Features
-
-### Recursive ACL Auditing (Primary Function)
-
-The tool is designed for comprehensive access audits across folder hierarchies. Common scenarios:
-
-- **Post-termination audits**: "Did we revoke all of Bob's access?" - Scan recursively to find any remaining grants in subfolders
-- **Compliance reviews**: "Who can access our Financial data?" - Complete visibility including subfolder permissions  
-- **Access consolidation**: "Let's audit the Projects folder before archiving" - Discover all users with any level of access
-
-**Smart scanning with pruning**:
-- Recursive by default when using `-r` (max-depth: 3, adjustable)
-- Non-recursive mode available for single-folder checks (omit `-r`)
-- Automatically skips subfolders when explicit permission is found (inherited access is assumed)
-- Progress tracking shows folders scanned per level
-- Supports both folders and files with `--type both`
-
-### GUI Interface
-
-- Interactive folder navigation
-- Colour-coded permission display (green: owner, blue: write, yellow: read)
-- Treeview showing permission details (ID, roles, users, links, expiration)
-
-### Safety Features
+**Safety Features:**
 
 - `--dry-run` shows exactly what would be changed before execution
 - Confirmation prompts required for all destructive operations
-- Clear output listing all affected items
 - Cannot remove owner permissions (enforced)
 
 ## Troubleshooting
