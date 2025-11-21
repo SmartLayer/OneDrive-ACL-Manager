@@ -837,27 +837,13 @@ proc print_recursive_acl {root_path root_permissions all_folders max_depth} {
     }
 }
 
-proc get_rclone_conf_path {} {
-    # Get rclone config path based on platform
-    switch -glob --  $::tcl_platform(platform) {
-        windows {
-            return [file join $::env(APPDATA) rclone rclone.conf]
-        }
-        macosx {
-            return [file join $::env(HOME) .config rclone rclone.conf]
-        }
-        unix {
-            return [file join $::env(HOME) .config rclone rclone.conf]
-        }
-        default {
-            return [file join $::env(HOME) .config rclone rclone.conf]
-        }
-    }
-}
-
 proc find_onedrive_remotes {} {
     # Find all OneDrive remotes in rclone configuration
-    set conf_path [get_rclone_conf_path]
+    if {$::tcl_platform(platform) eq "windows"} {
+        set conf_path [file join $::env(APPDATA) rclone rclone.conf]
+    } else {
+        set conf_path [file join $::env(HOME) .config rclone rclone.conf]
+    }
     if {![file exists $conf_path]} {
         return {}
     }
@@ -1079,19 +1065,11 @@ proc get_access_token {rclone_remote {require_capability ""} {return_format "sim
                         if {$require_capability eq "full" && $capability ne "full"} {
                             debug_log "Full capability required but token.json has $capability"
                             puts "❌ Operation requires full permissions. Please re-authenticate."
-                            if {$return_format eq "simple"} {
-                                return ""
-                            } else {
-                                return [list "" "insufficient" "n/a"]
-                            }
+                            return [expr {$return_format eq "simple" ? "" : [list "" "insufficient" "n/a"]}]
                         }
                         
                         # Return in requested format
-                        if {$return_format eq "simple"} {
-                            return $access_token
-                        } else {
-                            return [list $access_token $capability $expires_at]
-                        }
+                        return [expr {$return_format eq "simple" ? $access_token : [list $access_token $capability $expires_at]}]
                     }
                     # If token_data is empty (expired and refresh failed), fall through to rclone.conf
                 } else {
@@ -1109,22 +1087,14 @@ proc get_access_token {rclone_remote {require_capability ""} {return_format "sim
     if {$require_capability eq "full"} {
         debug_log "Full capability required but only rclone token available"
         puts "❌ Operation requires full permissions. Please re-authenticate."
-        if {$return_format eq "simple"} {
-            return ""
-        } else {
-            return [list "" "insufficient" "n/a"]
-        }
+        return [expr {$return_format eq "simple" ? "" : [list "" "insufficient" "n/a"]}]
     }
     
     # Parse rclone.conf
     lassign [parse_rclone_conf_token $rclone_remote] parse_success token_dict
     
     if {!$parse_success} {
-        if {$return_format eq "simple"} {
-            return ""
-        } else {
-            return [list "" "unknown" "unknown"]
-        }
+        return [expr {$return_format eq "simple" ? "" : [list "" "unknown" "unknown"]}]
     }
     
     # Check if token is expired and refresh if needed
@@ -1146,11 +1116,7 @@ proc get_access_token {rclone_remote {require_capability ""} {return_format "sim
             puts "   rclone config reconnect $rclone_remote"
             puts "Or re-authenticate completely:"
             puts "   rclone config"
-            if {$return_format eq "simple"} {
-                return ""
-            } else {
-                return [list "" "unknown" "unknown"]
-            }
+            return [expr {$return_format eq "simple" ? "" : [list "" "unknown" "unknown"]}]
         }
     }
     
@@ -1160,11 +1126,7 @@ proc get_access_token {rclone_remote {require_capability ""} {return_format "sim
     if {$access_token eq ""} {
         puts "Error: No access_token in token JSON"
         puts "Token may be expired. Please re-authenticate: rclone authorize onedrive"
-        if {$return_format eq "simple"} {
-            return ""
-        } else {
-            return [list "" "unknown" "unknown"]
-        }
+        return [expr {$return_format eq "simple" ? "" : [list "" "unknown" "unknown"]}]
     }
     
     debug_log "Successfully extracted access token from rclone.conf"
@@ -1186,12 +1148,8 @@ proc get_access_token {rclone_remote {require_capability ""} {return_format "sim
     }
     
     # Return in requested format
-    if {$return_format eq "simple"} {
-        return $access_token
-    } else {
-        debug_log "Using rclone.conf token (read-only mode)"
-        return [list $access_token "read-only" "unknown"]
-    }
+    debug_log "Using rclone.conf token (read-only mode)"
+    return [expr {$return_format eq "simple" ? $access_token : [list $access_token "read-only" "unknown"]}]
 }
 
 # ============================================================================
