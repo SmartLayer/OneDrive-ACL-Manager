@@ -24,7 +24,27 @@ A TCL/Tk-based tool for auditing and managing Access Control Lists (ACLs) across
 - `tcllib` package (includes `json`)
 - `tcl-tls` package for HTTPS requests
 
-## Installation
+## Installation: Windows
+
+1. **Download acl-inspector.tcl** to your preferred location (e.g., user home directory)
+
+2. **Ensure rclone.conf exists** at `%APPDATA%\rclone\rclone.conf`:
+   - A working configuration file is required (not yet tested without one)
+   - Installing rclone itself is optional; copying a working rclone.conf from another system is sufficient
+
+3. **Install Magicsplat TCL/TK 9.0**:
+   - Other versions have not been tested
+   - Runtime environment will be installed at `%APPDATA%\Local\Apps\Tcl90`
+
+4. **Run the application**:
+   ```
+   C:>"AppData\Local\Apps\Tcl90\bin\wish.exe" acl-inspector.tcl
+   ```
+
+Tested on Windows 11.
+
+
+## Installation: Linux and OS X
 
 1. **Install rclone and configure with OneDrive**:
    ```bash
@@ -36,7 +56,7 @@ A TCL/Tk-based tool for auditing and managing Access Control Lists (ACLs) across
    # Ubuntu/Debian:
    sudo apt-get install tcllib tcl-tls
    
-   # macOS:
+   # OS X:
    brew install tcl-tk
    ```
 
@@ -213,4 +233,4 @@ OAuth tokens are obtained from either `token.json` (full permissions) or the rcl
 
 ## License
 
-This project is provided as-is for educational and demonstration purposes.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
