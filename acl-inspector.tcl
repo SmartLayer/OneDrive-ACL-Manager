@@ -166,6 +166,24 @@ if {[info commands tk] ne ""} {
     bind $browser_tree <<TreeviewSelect>> {on_tree_select $browser_tree}
     bind $browser_tree <<TreeviewOpen>> {on_tree_expand $browser_tree [%W focus]}
 
+    # Bind double-click to toggle folder expansion
+    bind $browser_tree <Double-Button-1> {
+        set item [%W identify item %x %y]
+        if {$item ne ""} {
+            set values [%W item $item -values]
+            set type [lindex $values 1]
+            if {$type eq "folder"} {
+                set is_open [%W item $item -open]
+                if {$is_open} {
+                    %W item $item -open 0
+                } else {
+                    %W item $item -open 1
+                    on_tree_expand %W $item
+                }
+            }
+        }
+    }
+
     # Insert root item with dummy child to show expand arrow
     set root_item [$browser_tree insert {} end -text "📁 OneDrive Root" -values [list "root" "folder" 0]]
     $browser_tree insert $root_item end -text ""  ;# Dummy child for expand arrow
@@ -208,17 +226,16 @@ if {[info commands tk] ne ""} {
     pack [ttk::scrollbar $right_frame.tree.vscroll -orient vertical -command "$right_frame.tree.list yview"] -side right -fill y
 
     # Treeview widget (with multi-select enabled)
-    set acl_tree [ttk::treeview $right_frame.tree.list -columns {id roles user email link_type link_scope expires} -show {tree headings} -selectmode extended \
+    set acl_tree [ttk::treeview $right_frame.tree.list -columns {user roles id link_type link_scope expires} -show {tree headings} -selectmode extended \
         -yscrollcommand "$right_frame.tree.vscroll set" -xscrollcommand "$right_frame.tree.hscroll set"]
     pack $acl_tree -side left -fill both -expand yes
 
     # Configure treeview columns (reduced minwidths for better initial sizing)
     configure_tree_columns $acl_tree {
-        #0 "" 60 40
-        id "ID" 150 80
-        roles "Roles" 70 50
+        #0 "Email" 150 100
         user "User" 120 80
-        email "Email" 150 100
+        roles "Roles" 70 50
+        id "ID" 0 0
         link_type "Link Type" 70 50
         link_scope "Link Scope" 70 50
         expires "Expires" 100 80
@@ -228,6 +245,29 @@ if {[info commands tk] ne ""} {
     $acl_tree tag configure owner -background lightgreen
     $acl_tree tag configure write -background lightblue
     $acl_tree tag configure read -background lightyellow
+
+    # Create context menu for copying email
+    menu $acl_tree.context_menu -tearoff 0
+    $acl_tree.context_menu add command -label "Copy Email" -command {
+        set acl_tree $::f.paned.acl.tree.list
+        set selection [$acl_tree selection]
+        if {[llength $selection] > 0} {
+            set item [lindex $selection 0]
+            set email [$acl_tree item $item -text]
+            clipboard clear
+            clipboard append $email
+        }
+    }
+
+    # Bind right-click to show context menu
+    bind $acl_tree <Button-3> {
+        set acl_tree %W
+        set item [%W identify item %x %y]
+        if {$item ne ""} {
+            %W selection set $item
+            tk_popup %W.context_menu %X %Y
+        }
+    }
 
     # Action buttons frame at bottom of right pane
     set action_buttons_frame [ttk::frame $right_frame.actions]
@@ -2416,8 +2456,8 @@ proc on_remove_selected_click {} {
     
     foreach item $selection {
         set values [$tree item $item -values]
-        set permission_id [lindex $values 0]
-        
+        set permission_id [lindex $values 2]
+
         set remove_result [remove_permission $current_item_id $permission_id $access_token]
         set remove_status [lindex $remove_result 0]
         
@@ -3327,23 +3367,31 @@ proc gui_fetch_acl {item_id remote_name} {
     }
     
     gui_update_status "✅ Found $perm_count permission(s) in ACL (Token: $capability)" green
-    
+
+    # Sort permissions by email
+    set sorted_permissions [lsort -command {
+        apply {{a b} {
+            lassign [extract_user_info $a] _ email_a
+            lassign [extract_user_info $b] _ email_b
+            return [string compare -nocase $email_a $email_b]
+        }}
+    } $permissions]
+
     # Populate treeview (filter out owner permissions)
-    set perm_num 1
-    foreach perm $permissions {
+    foreach perm $sorted_permissions {
         set roles [dict get $perm roles]
-        
+
         # Skip owner permissions - they can't be removed and OneDrive doesn't show them
         if {[lsearch $roles "owner"] >= 0} {
             continue
         }
-        
+
         set perm_id [dict get $perm id]
         set roles_str [join $roles ", "]
-        
+
         # Get user information
         lassign [extract_user_info $perm] user_name user_email
-        
+
         # Get link information
         set link_type "N/A"
         set link_scope "N/A"
@@ -3356,25 +3404,23 @@ proc gui_fetch_acl {item_id remote_name} {
                 set link_scope [dict get $link scope]
             }
         }
-        
+
         # Get expiration
         set expires "N/A"
         if {[dict exists $perm expirationDateTime]} {
             set expires [dict get $perm expirationDateTime]
         }
-        
+
         # Determine tag based on roles
         set tag "write"
         if {[lsearch $roles "read"] >= 0} {
             set tag "read"
         }
-        
-        # Insert into treeview
-        $acl_tree insert {} end -text "$perm_num" \
-            -values [list $perm_id $roles_str $user_name $user_email $link_type $link_scope $expires] \
+
+        # Insert into treeview (email in tree column, reordered data columns)
+        $acl_tree insert {} end -text $user_email \
+            -values [list $user_name $roles_str $perm_id $link_type $link_scope $expires] \
             -tags $tag
-        
-        incr perm_num
     }
     
     # Enable invite button now that ACL is loaded
