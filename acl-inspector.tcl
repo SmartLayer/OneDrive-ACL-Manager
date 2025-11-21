@@ -72,16 +72,16 @@ set remote_entry ""
 set url_entry ""
 set action_buttons_frame ""
 
-# Multi-column browser variables
-set column_list {}        ;# List of column widgets
-set column_data {}        ;# List of column data (each element: {folder_id items})
-set selected_item {}      ;# Currently selected item {col_index item_index id is_folder}
+# Treeview browser variables
+set browser_tree ""       ;# Browser treeview widget reference
+set acl_tree ""           ;# ACL display treeview widget reference
+set selected_item {}      ;# Currently selected item {id is_folder}
 set fetch_button ""       ;# Fetch ACL button widget
 set acl_path_label ""     ;# Label showing path of current ACL display
 
 if {[info commands tk] ne ""} {
     # Declare global widget variables
-    global remote_entry url_entry fetch_button acl_path_label column_list column_data selected_item action_buttons_frame f
+    global remote_entry url_entry fetch_button acl_path_label browser_tree acl_tree selected_item action_buttons_frame f
     
     # Create main window
     wm title . "OneDrive ACL Lister"
@@ -128,100 +128,135 @@ if {[info commands tk] ne ""} {
     $remote_entry insert 0 "OneDrive"
     # Don't pack this - it's hidden
 
-    # Multi-column browser frame
-    pack [ttk::frame $f.browser] -fill both -expand yes -pady {0 10}
+    # ========================================================================
+    # MAIN CONTENT: Left-Right Split Layout
+    # ========================================================================
 
-    ttk::label $f.browser.label -text "Browse OneDrive:"
-    pack $f.browser.label -anchor w -pady {0 5}
+    # Create horizontal panedwindow for left-middle-right layout
+    pack [ttk::panedwindow $f.paned -orient horizontal] -fill both -expand yes -pady {0 10}
 
-    # Create canvas and scrollbar for horizontal scrolling
-    set browser_canvas [canvas $f.browser.canvas -height 300 -highlightthickness 0]
-    pack [ttk::scrollbar $f.browser.scroll -orient horizontal -command "$browser_canvas xview"] -side bottom -fill x
-    pack $browser_canvas -side top -fill both -expand yes
-    $browser_canvas configure -xscrollcommand "$f.browser.scroll set"
+    # ========================================================================
+    # LEFT PANE: Browser
+    # ========================================================================
+    set left_frame [ttk::frame $f.paned.left]
+    $f.paned add $left_frame -weight 1
 
-    # Create frame inside canvas to hold columns
-    set columns_container [ttk::frame $browser_canvas.columns]
-    $browser_canvas create window 0 0 -anchor nw -window $columns_container
+    ttk::label $left_frame.label -text "Browse OneDrive:"
+    pack $left_frame.label -anchor w -pady {0 5}
 
-    # Bind canvas resize to update scroll region
-    bind $columns_container <Configure> {
-        .main.browser.canvas configure -scrollregion [.main.browser.canvas bbox all]
+    # Create treeview with scrollbars
+    pack [ttk::scrollbar $left_frame.hscroll -orient horizontal -command "$left_frame.tree xview"] -side bottom -fill x
+    pack [ttk::scrollbar $left_frame.vscroll -orient vertical -command "$left_frame.tree yview"] -side right -fill y
+
+    set browser_tree [ttk::treeview $left_frame.tree \
+        -columns {item_id type loaded} -show tree \
+        -selectmode browse \
+        -yscrollcommand "$left_frame.vscroll set" \
+        -xscrollcommand "$left_frame.hscroll set"]
+    pack $browser_tree -side left -fill both -expand yes
+
+    # Hide metadata columns (used internally)
+    $browser_tree column item_id -width 0 -stretch 0
+    $browser_tree column type -width 0 -stretch 0
+    $browser_tree column loaded -width 0 -stretch 0
+
+    # Bind events for selection and expansion
+    bind $browser_tree <<TreeviewSelect>> {on_tree_select $browser_tree}
+    bind $browser_tree <<TreeviewOpen>> {on_tree_expand $browser_tree [%W focus]}
+
+    # Insert root item with dummy child to show expand arrow
+    set root_item [$browser_tree insert {} end -text "📁 OneDrive Root" -values [list "root" "folder" 0]]
+    $browser_tree insert $root_item end -text ""  ;# Dummy child for expand arrow
+
+    # ========================================================================
+    # RIGHT PANE: ACL Display
+    # ========================================================================
+    set right_frame [ttk::frame $f.paned.right]
+    $f.paned add $right_frame -weight 2
+
+    # Set initial sash position after window is mapped (gives 35% to left, 65% to right)
+    bind $f.paned <Map> {
+        after idle {
+            if {[winfo exists .main.paned]} {
+                set total_width [winfo width .main.paned]
+                if {$total_width > 1} {
+                    set left_width [expr {int($total_width * 0.35)}]
+                    .main.paned sashpos 0 $left_width
+                }
+            }
+        }
     }
 
-    # Fetch button frame (between browser and ACL display)
-    pack [ttk::frame $f.fetch] -fill x -pady {5 10}
-    
-    set fetch_button [ttk::button $f.fetch.button -text "Fetch ACL" -command on_fetch_button_click -state disabled]
-    pack $fetch_button -side left -padx 5
-    
-    # Action buttons on the right side
-    set action_buttons_frame [ttk::frame $f.fetch.actions]
-    pack $action_buttons_frame -side right -padx 5
-    
-    ttk::button $action_buttons_frame.remove -text "Remove Selected" -command on_remove_selected_click -state disabled
-    ttk::button $action_buttons_frame.invite -text "Invite User" -command on_invite_user_click -state disabled
-    
-    pack $action_buttons_frame.remove -side left -padx 2
-    pack $action_buttons_frame.invite -side left -padx 2
-
-    # Global status label (shows status for all operations)
-    pack [ttk::label $f.status -text "Ready" -foreground blue] -fill x -pady {5 5}
-
-    # ACL display section (lower half)
-    pack [ttk::frame $f.acl] -fill both -expand yes
+    # Fetch button at top of right pane
+    set fetch_button [ttk::button $right_frame.fetch -text "Fetch ACL" \
+        -command on_fetch_button_click -state disabled]
+    pack $fetch_button -anchor w -pady {0 5}
 
     # ACL path label (shows which item's ACL is displayed)
-    pack [ttk::frame $f.acl.path] -fill x -pady {0 5}
-    ttk::label $f.acl.path.label -text "ACL for:"
-    pack $f.acl.path.label -side left
-    set acl_path_label [ttk::entry $f.acl.path.entry]
+    pack [ttk::frame $right_frame.path] -fill x -pady {0 5}
+    ttk::label $right_frame.path.label -text "Item:"
+    pack $right_frame.path.label -side left
+    set acl_path_label [ttk::entry $right_frame.path.entry]
     pack $acl_path_label -side left -fill x -expand yes -padx {5 0}
     $acl_path_label configure -state readonly
 
-    # Create treeview frame
-    pack [ttk::frame $f.acl.tree] -fill both -expand yes
+    # Create treeview frame for ACL display
+    pack [ttk::frame $right_frame.tree] -fill both -expand yes
 
     # Scrollbars
-    pack [ttk::scrollbar $f.acl.tree.hscroll -orient horizontal -command "$f.acl.tree.list xview"] -side bottom -fill x
-    
-    pack [ttk::scrollbar $f.acl.tree.vscroll -orient vertical -command "$f.acl.tree.list yview"] -side right -fill y
+    pack [ttk::scrollbar $right_frame.tree.hscroll -orient horizontal -command "$right_frame.tree.list xview"] -side bottom -fill x
+    pack [ttk::scrollbar $right_frame.tree.vscroll -orient vertical -command "$right_frame.tree.list yview"] -side right -fill y
 
     # Treeview widget (with multi-select enabled)
-    ttk::treeview $f.acl.tree.list -columns {id roles user email link_type link_scope expires} -show {tree headings} -selectmode extended -height 10 \
-        -yscrollcommand "$f.acl.tree.vscroll set" -xscrollcommand "$f.acl.tree.hscroll set"
-    pack $f.acl.tree.list -side left -fill both -expand yes
+    set acl_tree [ttk::treeview $right_frame.tree.list -columns {id roles user email link_type link_scope expires} -show {tree headings} -selectmode extended \
+        -yscrollcommand "$right_frame.tree.vscroll set" -xscrollcommand "$right_frame.tree.hscroll set"]
+    pack $acl_tree -side left -fill both -expand yes
 
-    # Configure treeview columns
-    $f.acl.tree.list heading #0 -text ""
-    $f.acl.tree.list column #0 -width 100 -minwidth 80
+    # Configure treeview columns (reduced minwidths for better initial sizing)
+    $acl_tree heading #0 -text ""
+    $acl_tree column #0 -width 60 -minwidth 40
 
-    $f.acl.tree.list heading id -text "ID"
-    $f.acl.tree.list column id -width 200 -minwidth 150
+    $acl_tree heading id -text "ID"
+    $acl_tree column id -width 150 -minwidth 80
 
-    $f.acl.tree.list heading roles -text "Roles"
-    $f.acl.tree.list column roles -width 80 -minwidth 60
+    $acl_tree heading roles -text "Roles"
+    $acl_tree column roles -width 70 -minwidth 50
 
-    $f.acl.tree.list heading user -text "User"
-    $f.acl.tree.list column user -width 150 -minwidth 100
+    $acl_tree heading user -text "User"
+    $acl_tree column user -width 120 -minwidth 80
 
-    $f.acl.tree.list heading email -text "Email"
-    $f.acl.tree.list column email -width 200 -minwidth 150
+    $acl_tree heading email -text "Email"
+    $acl_tree column email -width 150 -minwidth 100
 
-    $f.acl.tree.list heading link_type -text "Link Type"
-    $f.acl.tree.list column link_type -width 80 -minwidth 60
+    $acl_tree heading link_type -text "Link Type"
+    $acl_tree column link_type -width 70 -minwidth 50
 
-    $f.acl.tree.list heading link_scope -text "Link Scope"
-    $f.acl.tree.list column link_scope -width 80 -minwidth 60
+    $acl_tree heading link_scope -text "Link Scope"
+    $acl_tree column link_scope -width 70 -minwidth 50
 
-    $f.acl.tree.list heading expires -text "Expires"
-    $f.acl.tree.list column expires -width 120 -minwidth 100
+    $acl_tree heading expires -text "Expires"
+    $acl_tree column expires -width 100 -minwidth 80
 
     # Configure tags for different permission types
-    $f.acl.tree.list tag configure owner -background lightgreen
-    $f.acl.tree.list tag configure write -background lightblue
-    $f.acl.tree.list tag configure read -background lightyellow
-    
+    $acl_tree tag configure owner -background lightgreen
+    $acl_tree tag configure write -background lightblue
+    $acl_tree tag configure read -background lightyellow
+
+    # Action buttons frame at bottom of right pane
+    set action_buttons_frame [ttk::frame $right_frame.actions]
+    pack $action_buttons_frame -side bottom -fill x -pady {10 0}
+
+    ttk::button $action_buttons_frame.remove -text "Remove Selected" -command on_remove_selected_click -state disabled
+    ttk::button $action_buttons_frame.invite -text "Invite User" -command on_invite_user_click -state disabled
+
+    pack $action_buttons_frame.remove -side left -padx 2
+    pack $action_buttons_frame.invite -side left -padx 2
+
+    # ========================================================================
+    # BOTTOM: Status Label
+    # ========================================================================
+    pack [ttk::label $f.status -text "Ready" -foreground blue] -fill x -pady {5 5}
+
     # Fix Treeview row height to match font (prevents text clipping on Linux HiDPI)
     set font_name [ttk::style lookup Treeview -font]
     if {$font_name eq ""} { set font_name TkDefaultFont }
@@ -253,73 +288,34 @@ proc debug_log {message} {
 }
 
 # ============================================================================
-# Multi-Column Browser Functions
+# Treeview Browser Functions
 # ============================================================================
 
-proc create_column {col_index} {
-    # Create a new column listbox at the specified index
-    global column_list
-    
-    set container .main.browser.canvas.columns
-    pack [ttk::frame $container.col$col_index -relief ridge -borderwidth 1] -side left -fill both -expand yes -padx 2
-    
-    set listbox [listbox $container.col$col_index.list -width 25 -height 15]
-    pack [ttk::scrollbar $container.col$col_index.scroll -orient vertical -command "$listbox yview"] -side right -fill y
-    pack $listbox -side left -fill both -expand yes
-    $listbox configure -yscrollcommand "$container.col$col_index.scroll set"
-    
-    # Bind single click event
-    bind $listbox <Button-1> [list on_column_item_click $col_index %W %y]
-    
-    lappend column_list $listbox
-    
-    return $listbox
-}
+proc load_tree_children {tree parent_item folder_id} {
+    # Load children for a folder in the treeview (lazy loading)
+    global remote_entry
 
-proc destroy_columns_after {col_index} {
-    # Remove all columns after the specified index
-    global column_list column_data
-    
-    set num_columns [llength $column_list]
-    
-    for {set i [expr $col_index + 1]} {$i < $num_columns} {incr i} {
-        set listbox [lindex $column_list $i]
-        set frame [winfo parent $listbox]
-        destroy $frame
-    }
-    
-    # Update column_list and column_data
-    set column_list [lrange $column_list 0 $col_index]
-    set column_data [lrange $column_data 0 $col_index]
-}
+    debug_log "Loading tree children for folder ID: $folder_id"
 
-proc populate_column {col_index folder_id} {
-    # Populate a column with the contents of a folder
-    global column_list column_data access_token remote_entry
-    
-    debug_log "Populating column $col_index with folder ID: $folder_id"
-    
-    # Ensure we have enough columns
-    while {[llength $column_list] <= $col_index} {
-        create_column [llength $column_list]
+    # Check if already loaded
+    if {$parent_item ne ""} {
+        set values [$tree item $parent_item -values]
+        set loaded [lindex $values 2]
+        if {$loaded} {
+            debug_log "Folder already loaded, skipping"
+            return
+        }
     }
-    
-    set listbox [lindex $column_list $col_index]
-    $listbox delete 0 end
-    $listbox insert end "Loading..."
-    update
-    
+
     # Get access token (any capability is fine for browsing)
     set result [get_access_token [$remote_entry get] "" "detailed" 1]
     set access_token [lindex $result 0]
-    set capability [lindex $result 1]
-    
+
     if {$access_token eq ""} {
-        $listbox delete 0 end
-        $listbox insert end "❌ No access token"
+        debug_log "No access token available"
         return
     }
-    
+
     # Fetch folder contents from OneDrive API
     set headers [list Authorization "Bearer $access_token"]
     if {$folder_id eq "root"} {
@@ -327,119 +323,142 @@ proc populate_column {col_index folder_id} {
     } else {
         set children_url "https://graph.microsoft.com/v1.0/me/drive/items/$folder_id/children"
     }
-    
+
     set result [make_http_request $children_url $headers]
     set status [lindex $result 0]
     set data [lindex $result 1]
-    
+
     if {$status eq "200"} {
-        $listbox delete 0 end
-        
+        # Remove dummy child if parent exists
+        if {$parent_item ne ""} {
+            foreach child [$tree children $parent_item] {
+                $tree delete $child
+            }
+        }
+
         set children_dict [json::json2dict $data]
         set children [dict get $children_dict value]
-        
-        # Store items data for this column
-        set items_data {}
-        
+
         # Sort: folders first, then files
         set folders {}
         set files {}
-        
+
         foreach child $children {
             set child_name [dict get $child name]
             set child_id [dict get $child id]
             set is_folder [dict exists $child folder]
-            
-            set item_data [dict create \
-                name $child_name \
-                id $child_id \
-                is_folder $is_folder]
-            
+
             if {$is_folder} {
-                lappend folders $item_data
+                lappend folders [dict create name $child_name id $child_id]
             } else {
-                lappend files $item_data
+                lappend files [dict create name $child_name id $child_id]
             }
         }
-        
-        # Add folders first
+
+        # Insert folders with dummy children
         foreach item $folders {
             set name [dict get $item name]
-            $listbox insert end "📁 $name"
-            lappend items_data $item
+            set item_id [dict get $item id]
+            set folder_item [$tree insert $parent_item end \
+                -text "📁 $name" \
+                -values [list $item_id "folder" 0]]
+            # Insert dummy child to show expand arrow
+            $tree insert $folder_item end -text ""
         }
-        
-        # Add files
+
+        # Insert files (no children)
         foreach item $files {
             set name [dict get $item name]
-            $listbox insert end "📄 $name"
-            lappend items_data $item
+            set item_id [dict get $item id]
+            $tree insert $parent_item end \
+                -text "📄 $name" \
+                -values [list $item_id "file" 1]
         }
-        
-        # Update column_data
-        while {[llength $column_data] <= $col_index} {
-            lappend column_data {}
+
+        # Mark parent as loaded
+        if {$parent_item ne ""} {
+            set values [$tree item $parent_item -values]
+            set item_id [lindex $values 0]
+            set type [lindex $values 1]
+            $tree item $parent_item -values [list $item_id $type 1]
         }
-        set column_data [lreplace $column_data $col_index $col_index \
-            [dict create folder_id $folder_id items $items_data]]
-        
-        debug_log "Column $col_index populated with [llength $items_data] items"
+
+        debug_log "Tree children loaded: [llength $folders] folders, [llength $files] files"
     } else {
-        $listbox delete 0 end
-        $listbox insert end "❌ Error loading"
+        debug_log "Error loading tree children: status $status"
     }
 }
 
-proc on_column_item_click {col_index widget y_coord} {
-    # Handle click on an item in a column
-    global column_data selected_item url_entry fetch_button action_buttons_frame
-    
-    # Get the index of the clicked item
-    set item_index [$widget nearest $y_coord]
-    if {$item_index < 0} {
+proc gui_clear_acl_display {} {
+    # Clear the ACL display treeview and reset the item label
+    global acl_tree acl_path_label action_buttons_frame
+
+    # Clear ACL treeview
+    foreach item [$acl_tree children {}] {
+        $acl_tree delete $item
+    }
+
+    # Clear ACL path label
+    $acl_path_label configure -state normal
+    $acl_path_label delete 0 end
+    $acl_path_label insert 0 "(No ACL loaded - click Fetch ACL)"
+    $acl_path_label configure -state readonly
+
+    # Disable action buttons until ACL is fetched
+    $action_buttons_frame.remove configure -state disabled
+    $action_buttons_frame.invite configure -state disabled
+
+    debug_log "ACL display cleared"
+}
+
+proc on_tree_select {tree} {
+    # Handle selection of an item in the treeview
+    global selected_item url_entry fetch_button
+
+    set selection [$tree selection]
+    if {[llength $selection] == 0} {
         return
     }
-    
-    # Select the item in the listbox
-    $widget selection clear 0 end
-    $widget selection set $item_index
-    
-    # Get the item data
-    set col_data [lindex $column_data $col_index]
-    set items [dict get $col_data items]
-    set item [lindex $items $item_index]
-    
-    set item_name [dict get $item name]
-    set item_id [dict get $item id]
-    set is_folder [dict get $item is_folder]
-    
-    # NOTE: Don't log item_name as it may contain unicode that crashes console
-    debug_log "Item clicked: ID=$item_id, is_folder=$is_folder"
-    
-    # Update selected item
+
+    set item [lindex $selection 0]
+    set values [$tree item $item -values]
+
+    set item_id [lindex $values 0]
+    set type [lindex $values 1]
+    set is_folder [expr {$type eq "folder"}]
+
+    # Update selected item (simplified structure)
     set selected_item [dict create \
-        col_index $col_index \
-        item_index $item_index \
         id $item_id \
         is_folder $is_folder]
-    
+
+    debug_log "Item selected: ID=$item_id, is_folder=$is_folder"
+
     # Update URL bar
     $url_entry configure -state normal
     $url_entry delete 0 end
     $url_entry insert 0 "https://onedrive.live.com/?id=$item_id"
     $url_entry configure -state readonly
-    
-    # Enable fetch button and invite button (both work with item ID)
+
+    # Clear ACL display (user must click Fetch to see ACL)
+    gui_clear_acl_display
+
+    # Enable fetch button (user can now fetch ACL for this item)
     $fetch_button configure -state normal
-    $action_buttons_frame.invite configure -state normal
-    
-    # If it's a folder, destroy columns after this one and create a new column
-    if {$is_folder} {
-        destroy_columns_after $col_index
-        populate_column [expr $col_index + 1] $item_id
-    } else {
-        # If it's a file, just destroy columns after this one
-        destroy_columns_after $col_index
+}
+
+proc on_tree_expand {tree item} {
+    # Handle expansion of a folder in the treeview (lazy load children)
+    set values [$tree item $item -values]
+    set item_id [lindex $values 0]
+    set type [lindex $values 1]
+    set loaded [lindex $values 2]
+
+    debug_log "Tree item expanded: ID=$item_id, type=$type, loaded=$loaded"
+
+    # Only load if folder and not yet loaded
+    if {$type eq "folder" && !$loaded} {
+        load_tree_children $tree $item $item_id
     }
 }
 
@@ -2312,8 +2331,8 @@ proc ensure_edit_capability {} {
 
 proc on_invite_user_click {} {
     # Show dialog to invite a user
-    global current_item_id remote_entry f
-    set tree $f.acl.tree.list
+    global current_item_id remote_entry f acl_tree
+    set tree $acl_tree
     
     if {$current_item_id eq ""} {
         tk_messageBox -type ok -icon warning -title "No Item Selected" \
@@ -2408,8 +2427,8 @@ proc on_invite_user_click {} {
 
 proc on_remove_selected_click {} {
     # Remove selected permissions from treeview
-    global f current_item_id remote_entry
-    set tree $f.acl.tree.list
+    global f current_item_id remote_entry acl_tree
+    set tree $acl_tree
     
     if {$current_item_id eq ""} {
         tk_messageBox -type ok -icon warning -title "No Item Selected" \
@@ -3263,7 +3282,7 @@ proc fetch_permissions_by_id {item_id access_token} {
 
 # GUI wrapper: Fetch ACL and update GUI widgets
 proc gui_fetch_acl {item_id remote_name} {
-    global f current_item_id token_capability action_buttons_frame acl_path_label
+    global f current_item_id token_capability action_buttons_frame acl_path_label acl_tree
     
     if {$item_id eq ""} {
         gui_update_status "Error: Invalid item ID" red
@@ -3334,8 +3353,8 @@ proc gui_fetch_acl {item_id remote_name} {
     gui_update_status "✅ Found $item_type" green
     
     # Clear existing treeview
-    foreach item [$f.acl.tree.list children {}] {
-        $f.acl.tree.list delete $item
+    foreach item [$acl_tree children {}] {
+        $acl_tree delete $item
     }
     gui_update_status "Treeview cleared" green
     
@@ -3353,9 +3372,9 @@ proc gui_fetch_acl {item_id remote_name} {
     set perm_count [llength $permissions]
     
     # Bind treeview selection event to enable/disable Remove button
-    bind $f.acl.tree.list <<TreeviewSelect>> {
-        global action_buttons_frame f
-        set selection [.main.acl.tree.list selection]
+    bind $acl_tree <<TreeviewSelect>> {
+        global action_buttons_frame acl_tree
+        set selection [$acl_tree selection]
         if {[llength $selection] > 0} {
             $action_buttons_frame.remove configure -state normal
         } else {
@@ -3412,13 +3431,16 @@ proc gui_fetch_acl {item_id remote_name} {
         }
         
         # Insert into treeview
-        $f.acl.tree.list insert {} end -text "$perm_num" \
+        $acl_tree insert {} end -text "$perm_num" \
             -values [list $perm_id $roles_str $user_name $user_email $link_type $link_scope $expires] \
             -tags $tag
         
         incr perm_num
     }
     
+    # Enable invite button now that ACL is loaded
+    $action_buttons_frame.invite configure -state normal
+
     gui_update_status "✅ ACL listing of: https://onedrive.live.com/?id=$item_id" green
 }
 
@@ -3681,9 +3703,11 @@ if {[info commands tk] ne ""} {
     
     # GUI mode - Initialize browser with root folder
     gui_update_status "OneDrive ACL Lister - Ready to browse and fetch ACL information" blue
-    
-    # Populate first column with root folder
-    populate_column 0 "root"
+
+    # Load root folder contents and auto-expand root item
+    set root_item [lindex [$browser_tree children {}] 0]
+    load_tree_children $browser_tree $root_item "root"
+    $browser_tree item $root_item -open 1
 } else {
     main $argc $argv
 }
