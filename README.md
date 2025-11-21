@@ -38,7 +38,7 @@ OneDrive shows you permissions for each folder, but not what's in the subfolders
 
 ## Installation: Windows
 
-1. **Download acl-inspector.tcl** to your preferred location (e.g., user home directory)
+1. **Download acl-manager.tcl** to your preferred location (e.g., user home directory)
 
 2. **Ensure rclone.conf exists** at `%APPDATA%\rclone\rclone.conf`:
    - A working configuration file is required (not yet tested without one)
@@ -50,7 +50,7 @@ OneDrive shows you permissions for each folder, but not what's in the subfolders
 
 4. **Run the application**:
    ```
-   C:>"AppData\Local\Apps\Tcl90\bin\wish.exe" acl-inspector.tcl
+   C:>"AppData\Local\Apps\Tcl90\bin\wish.exe" acl-manager.tcl
    ```
 
 Tested on Windows 11.
@@ -77,7 +77,7 @@ Tested on Windows 11.
 ### GUI Mode
 
 ```bash
-wish acl-inspector.tcl [item_path] [remote_name]
+wish acl-manager.tcl [item_path] [remote_name]
 ```
 
 ### Command Line Mode
@@ -85,7 +85,7 @@ wish acl-inspector.tcl [item_path] [remote_name]
 The CLI uses standard option-first interface for auditing access across folder hierarchies:
 
 ```bash
-tclsh acl-inspector.tcl [OPTIONS] [PATH]
+tclsh acl-manager.tcl [OPTIONS] [PATH]
 ```
 
 **PATH**: Folder or file to inspect (default: `/` - root) - must come after all options
@@ -115,45 +115,45 @@ tclsh acl-inspector.tcl [OPTIONS] [PATH]
 # ==================== RECURSIVE AUDITING (Primary Use Cases) ====================
 
 # Audit who has access to Financial folder and ALL subfolders
-tclsh acl-inspector.tcl -r "Finance"
+tclsh acl-manager.tcl -r "Finance"
 
 # Deep audit with custom depth (e.g., for complex hierarchies)
-tclsh acl-inspector.tcl -r --max-depth 10 "Projects"
+tclsh acl-manager.tcl -r --max-depth 10 "Projects"
 
 # Audit including both folders AND files
-tclsh acl-inspector.tcl -r --type both "Confidential"
+tclsh acl-manager.tcl -r --type both "Confidential"
 
 # Find everywhere an ex-employee still has access
-tclsh acl-inspector.tcl --only-user exemployee@example.com -r "Company"
+tclsh acl-manager.tcl --only-user exemployee@example.com -r "Company"
 
 # ==================== SINGLE-ITEM OPERATIONS ====================
 
 # Check ACL of one specific folder (no recursion)
-tclsh acl-inspector.tcl "Finance/Budget2025"
+tclsh acl-manager.tcl "Finance/Budget2025"
 
 # Check if specific user has access to one folder
-tclsh acl-inspector.tcl --only-user bob@example.com "Finance/Budget2025"
+tclsh acl-manager.tcl --only-user bob@example.com "Finance/Budget2025"
 
 # ==================== REMEDIATION OPERATIONS ====================
 
 # Remove ex-employee from entire hierarchy (dry run first!)
-tclsh acl-inspector.tcl --remove-user exemployee@example.com -r --dry-run "Projects"
+tclsh acl-manager.tcl --remove-user exemployee@example.com -r --dry-run "Projects"
 
 # Actually remove after reviewing dry-run output
-tclsh acl-inspector.tcl --remove-user exemployee@example.com -r "Projects"
+tclsh acl-manager.tcl --remove-user exemployee@example.com -r "Projects"
 
 # ==================== GRANTING ACCESS ====================
 
 # Invite user to folder (automatically inherited by subfolders)
-tclsh acl-inspector.tcl --invite newaccountant@example.com "Finance"
+tclsh acl-manager.tcl --invite newaccountant@example.com "Finance"
 
 # Invite with read-only access
-tclsh acl-inspector.tcl --invite auditor@example.com --read-only "Reports"
+tclsh acl-manager.tcl --invite auditor@example.com --read-only "Reports"
 
 # ==================== GUI MODE ====================
 
 # Launch GUI for interactive browsing
-wish acl-inspector.tcl "Finance"
+wish acl-manager.tcl "Finance"
 ```
 
 ## Permission Requirements
