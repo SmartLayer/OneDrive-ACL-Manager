@@ -448,24 +448,35 @@ proc on_tree_select {tree} {
     set type [lindex $values 1]
     set is_folder [expr {$type eq "folder"}]
 
+    # Check if selection actually changed
+    set selection_changed 0
+    if {[llength $selected_item] == 0 || ![dict exists $selected_item id]} {
+        set selection_changed 1
+    } elseif {[dict get $selected_item id] ne $item_id} {
+        set selection_changed 1
+    }
+
     # Update selected item (simplified structure)
     set selected_item [dict create \
         id $item_id \
         is_folder $is_folder]
 
-    debug_log "Item selected: ID=$item_id, is_folder=$is_folder"
+    debug_log "Item selected: ID=$item_id, is_folder=$is_folder, selection_changed=$selection_changed"
 
-    # Update URL bar
-    $url_entry configure -state normal
-    $url_entry delete 0 end
-    $url_entry insert 0 "https://onedrive.live.com/?id=$item_id"
-    $url_entry configure -state readonly
+    # Only update UI if selection actually changed
+    if {$selection_changed} {
+        # Update URL bar
+        $url_entry configure -state normal
+        $url_entry delete 0 end
+        $url_entry insert 0 "https://onedrive.live.com/?id=$item_id"
+        $url_entry configure -state readonly
 
-    # Clear ACL display (user must click Fetch to see ACL)
-    gui_clear_acl_display
+        # Clear ACL display (user must click Fetch to see ACL)
+        gui_clear_acl_display
 
-    # Enable fetch button (user can now fetch ACL for this item)
-    $fetch_button configure -state normal
+        # Enable fetch button (user can now fetch ACL for this item)
+        $fetch_button configure -state normal
+    }
 }
 
 proc on_tree_expand {tree item} {
