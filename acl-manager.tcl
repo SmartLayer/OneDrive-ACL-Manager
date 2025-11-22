@@ -235,8 +235,8 @@ if {[info commands tk] ne ""} {
     pack [ttk::scrollbar $right_frame.tree.vscroll -orient vertical -command "$right_frame.tree.list yview"] -side right -fill y
 
     # Treeview widget (with multi-select enabled)
-    set acl_tree [ttk::treeview $right_frame.tree.list -columns {user roles id link_type link_scope expires} -show {tree headings} -selectmode extended \
-        -displaycolumns {user roles link_type link_scope expires} \
+    set acl_tree [ttk::treeview $right_frame.tree.list -columns {user roles inherited link_type link_scope expires id} -show {tree headings} -selectmode extended \
+        -displaycolumns {user roles inherited link_type link_scope expires} \
         -yscrollcommand "$right_frame.tree.vscroll set" -xscrollcommand "$right_frame.tree.hscroll set"]
     pack $acl_tree -side left -fill both -expand yes
 
@@ -245,6 +245,7 @@ if {[info commands tk] ne ""} {
         #0 "Email" 150 100
         user "User" 120 80
         roles "Roles" 70 50
+        inherited "Inherited" 60 50
         link_type "Link Type" 70 50
         link_scope "Link Scope" 70 50
         expires "Expires" 100 80
@@ -254,6 +255,7 @@ if {[info commands tk] ne ""} {
     $acl_tree tag configure owner -background lightgreen
     $acl_tree tag configure write -background lightblue
     $acl_tree tag configure read -background lightyellow
+    $acl_tree tag configure inherited -background lightgray
 
     # Create context menu for copying email
     menu $acl_tree.context_menu -tearoff 0
@@ -943,6 +945,42 @@ proc get_rclone_conf_handler {} {
     return [open $conf_path r]
 }
 
+proc get_token_file_path {} {
+    # Get platform-specific path for token.json
+    # Returns: Full path to token.json file
+
+    # Determine config directory based on platform
+    if {$::tcl_platform(platform) eq "windows"} {
+        set config_dir [file join $::env(APPDATA) "OneDrive-ACL-Manager"]
+    } elseif {$::tcl_platform(os) eq "Darwin"} {
+        set config_dir [file join $::env(HOME) "Library" "Application Support" "OneDrive-ACL-Manager"]
+    } else {
+        set config_dir [file join $::env(HOME) ".config" "OneDrive-ACL-Manager"]
+    }
+
+    # Create directory if it doesn't exist
+    if {![file exists $config_dir]} {
+        file mkdir $config_dir
+    }
+
+    set token_path [file join $config_dir "token.json"]
+
+    # Migration: Move old token.json from cwd to new location (one-time operation)
+    set old_token_path "./token.json"
+    if {[file exists $old_token_path] && ![file exists $token_path]} {
+        debug_log "Migrating token.json from current directory to $config_dir"
+        if {[catch {
+            file rename $old_token_path $token_path
+            debug_log "Successfully migrated token.json to $token_path"
+        } err]} {
+            debug_log "Warning: Could not migrate token.json: $err"
+            debug_log "You may want to manually move $old_token_path to $token_path"
+        }
+    }
+
+    return $token_path
+}
+
 proc find_onedrive_remotes {} {
     # Find all OneDrive remotes in rclone configuration
     
@@ -1094,7 +1132,7 @@ proc get_access_token {rclone_remote {require_capability ""} {return_format "sim
     
     # Try token.json first (if enabled and return_format is detailed or explicitly requested)
     if {$try_token_json} {
-        set token_file "./token.json"
+        set token_file [get_token_file_path]
         if {[file exists $token_file]} {
             set parse_error ""
             set token_data {}
@@ -1571,14 +1609,15 @@ proc save_token_json {token_dict} {
     
     # Generate JSON object
     set json_output [json::write object {*}$json_parts]
-    
+
     # Write to file with restricted permissions
-    set fh [open "token.json" w 0600]
+    set token_file [get_token_file_path]
+    set fh [open $token_file w 0600]
     puts $fh $json_output
     close $fh
-    
+
     if {[dict exists $token_dict scope]} {
-        debug_log "Token saved to token.json with scopes: [dict get $token_dict scope]"
+        debug_log "Token saved to $token_file with scopes: [dict get $token_dict scope]"
     }
     return 1
 }
@@ -2002,8 +2041,9 @@ proc oauth_modal_reload_token {modal_window reload_btn} {
     }
     
     # Try to load token
-    if {![file exists "./token.json"]} {
-        $status_widget configure -text "Error: token.json file not found in current directory" -foreground red
+    set token_file [get_token_file_path]
+    if {![file exists $token_file]} {
+        $status_widget configure -text "Error: token.json file not found at $token_file" -foreground red
         $reload_btn configure -state normal
         return
     }
@@ -3067,11 +3107,11 @@ proc remove_user_permissions_cli {item_id user_email max_depth item_type dry_run
     
     # Confirm before removal
     puts "⚠️  This will remove $user_email's access from [llength $items_to_remove] item(s)."
-    puts -nonewline {Continue? [y/N]: }
+    puts -nonewline {Continue? [Y/n]: }
     flush stdout
     set response [gets stdin]
     
-    if {$response ne "y" && $response ne "Y"} {
+    if {$response ne "y" && $response ne "Y" && $response ne ""} {
         puts "❌ Cancelled by user"
         return
     }
@@ -3422,9 +3462,18 @@ proc gui_fetch_acl {item_id remote_name} {
     
     gui_update_status "✅ Found $perm_count permission(s) in ACL (Token: $capability)" green
 
-    # Sort permissions by email
+    # Sort permissions: non-inherited first, then inherited, each group sorted by email
     set sorted_permissions [lsort -command {
         apply {{a b} {
+            set inherited_a [dict exists $a inheritedFrom]
+            set inherited_b [dict exists $b inheritedFrom]
+
+            # Non-inherited (0) comes before inherited (1)
+            if {$inherited_a != $inherited_b} {
+                return [expr {$inherited_a - $inherited_b}]
+            }
+
+            # Within same inheritance status, sort by email
             lassign [extract_user_info $a] _ email_a
             lassign [extract_user_info $b] _ email_b
             return [string compare -nocase $email_a $email_b]
@@ -3465,16 +3514,25 @@ proc gui_fetch_acl {item_id remote_name} {
             set expires [dict get $perm expirationDateTime]
         }
 
-        # Determine tag based on roles
-        set tag "write"
+        # Check if inherited
+        set is_inherited [is_inherited_permission $perm]
+        set inherited_str [expr {$is_inherited ? "Yes" : "No"}]
+
+        # Determine tag based on roles and inheritance
+        set tags [list]
         if {[lsearch $roles "read"] >= 0} {
-            set tag "read"
+            lappend tags "read"
+        } else {
+            lappend tags "write"
+        }
+        if {$is_inherited} {
+            lappend tags "inherited"
         }
 
         # Insert into treeview (email in tree column, reordered data columns)
         $acl_tree insert {} end -text $user_email \
-            -values [list $user_name $roles_str $perm_id $link_type $link_scope $expires] \
-            -tags $tag
+            -values [list $user_name $roles_str $inherited_str $link_type $link_scope $expires $perm_id] \
+            -tags $tags
     }
     
     # Enable invite button now that ACL is loaded
