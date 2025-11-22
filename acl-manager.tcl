@@ -877,19 +877,27 @@ proc print_recursive_acl {root_path root_permissions all_folders max_depth} {
     }
 }
 
-proc find_onedrive_remotes {} {
-    # Find all OneDrive remotes in rclone configuration
+proc get_rclone_conf_handler {} {
     if {$::tcl_platform(platform) eq "windows"} {
         set conf_path [file join $::env(APPDATA) rclone rclone.conf]
     } else {
         set conf_path [file join $::env(HOME) .config rclone rclone.conf]
     }
     if {![file exists $conf_path]} {
-        return {}
+        puts "Error: rclone config not found at $conf_path"
+        puts "Please configure rclone first: rclone config"
+        return -code error "rclone.conf file not found"
     }
+    return [open $conf_path r]
+}
+
+proc find_onedrive_remotes {} {
+    # Find all OneDrive remotes in rclone configuration
     
+    set rconf_handler [get_rclone_conf_handler]
     set onedrive_remotes {}
-    set config_data [read [open $conf_path r]]
+    set config_data [read $rconf_handler]
+    close $rconf_handler
     
     foreach line [split $config_data \n] {
         set line [string trim $line]
@@ -902,6 +910,7 @@ proc find_onedrive_remotes {} {
             }
         }
     }
+    close $rconf_handler
     
     return $onedrive_remotes
 }
@@ -910,14 +919,6 @@ proc parse_rclone_conf_token {rclone_remote} {
     # Parse rclone.conf and extract token JSON for specified remote
     # Returns: {success token_dict} where success is 1 if found, 0 if not found
     # On error, prints messages and returns {0 {}}
-    
-    set conf_path [get_rclone_conf_path]
-    
-    if {![file exists $conf_path]} {
-        puts "Error: rclone config not found at $conf_path"
-        puts "Please configure rclone first: rclone config"
-        return [list 0 {}]
-    }
     
     # If no remote specified, find OneDrive remotes and use the first one
     if {$rclone_remote eq ""} {
@@ -940,7 +941,8 @@ proc parse_rclone_conf_token {rclone_remote} {
     }
     
     # Read config file
-    set config_data [read [open $conf_path r]]
+    set rconf_handler [get_rclone_conf_handler]
+    set config_data [read $rconf_handler]
     
     # Parse INI file format properly
     set in_remote_section 0
