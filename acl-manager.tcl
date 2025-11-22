@@ -3067,7 +3067,7 @@ proc remove_user_permissions_cli {item_id user_email max_depth item_type dry_run
     
     # Confirm before removal
     puts "⚠️  This will remove $user_email's access from [llength $items_to_remove] item(s)."
-    puts -nonewline "Continue? [y/N]: "
+    puts -nonewline {Continue? [y/N]: }
     flush stdout
     set response [gets stdin]
     
