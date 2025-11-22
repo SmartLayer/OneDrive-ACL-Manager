@@ -128,7 +128,16 @@ if {[info commands tk] ne ""} {
     pack $url_entry -side left -fill x -expand yes -padx {5 0}
     $url_entry insert 0 "https://onedrive.live.com/?id=root"
     $url_entry configure -state readonly
-    
+
+    # Path bar showing hierarchical path from root
+    pack [ttk::frame $f.input.path] -fill x -pady 2
+    ttk::label $f.input.path.label -text "Path:"
+    pack $f.input.path.label -side left
+    set path_entry [ttk::entry $f.input.path.entry -width 60]
+    pack $path_entry -side left -fill x -expand yes -padx {5 0}
+    $path_entry insert 0 "/"
+    $path_entry configure -state readonly
+
     # Hidden remote name entry (for rclone configuration)
     set remote_entry [ttk::entry $f.input.remote_hidden -width 20]
     $remote_entry insert 0 "OneDrive"
@@ -433,8 +442,32 @@ proc gui_clear_acl_display {} {
     debug_log "ACL display cleared"
 }
 
+proc build_tree_path {tree item} {
+    # Build hierarchical path from root to the given tree item
+    set path_parts {}
+    set current $item
+
+    while {$current ne ""} {
+        set parent [$tree parent $current]
+        # Skip the root item (the one with no parent)
+        if {$parent ne ""} {
+            set text [$tree item $current -text]
+            # Add to front of path
+            set path_parts [linsert $path_parts 0 $text]
+        }
+        # Move to parent
+        set current $parent
+    }
+
+    # Join with / separator, or return / if at root
+    if {[llength $path_parts] == 0} {
+        return "/"
+    }
+    return "/[join $path_parts "/"]"
+}
+
 proc on_tree_select {tree} {
-    global selected_item url_entry fetch_button
+    global selected_item url_entry fetch_button f
 
     set selection [$tree selection]
     if {[llength $selection] == 0} {
@@ -470,6 +503,14 @@ proc on_tree_select {tree} {
         $url_entry delete 0 end
         $url_entry insert 0 "https://onedrive.live.com/?id=$item_id"
         $url_entry configure -state readonly
+
+        # Update Path bar with hierarchical path
+        set path_widget $f.input.path.entry
+        set hierarchical_path [build_tree_path $tree $item]
+        $path_widget configure -state normal
+        $path_widget delete 0 end
+        $path_widget insert 0 $hierarchical_path
+        $path_widget configure -state readonly
 
         # Clear ACL display (user must click Fetch to see ACL)
         gui_clear_acl_display
