@@ -77,6 +77,53 @@ set selected_item {}      ;# Currently selected item {id is_folder}
 set fetch_button ""       ;# Fetch ACL button widget
 set acl_path_label ""     ;# Label showing path of current ACL display
 
+# Copy text to clipboard with workaround for Tk 8.x emoji bug
+# Tk 8.x corrupts Unicode characters outside BMP (including emoji) when
+# copying to X11 clipboard. This proc uses external tools as a fallback.
+proc copy_to_clipboard {text} {
+    # Check Tk version - Tk 9+ handles Unicode correctly
+    set tk_major [lindex [split [package require Tk] .] 0]
+    if {$tk_major >= 9} {
+        clipboard clear
+        clipboard append $text
+        return
+    }
+
+    # Tk 8.x workaround: use external clipboard tools
+    # Detect Wayland vs X11
+    set is_wayland [expr {[info exists ::env(WAYLAND_DISPLAY)] && $::env(WAYLAND_DISPLAY) ne ""}]
+
+    if {$is_wayland} {
+        # Try wl-copy for Wayland (run in background to not block)
+        if {![catch {exec which wl-copy}]} {
+            set tmpfile "/tmp/tcl_clipboard_[pid].txt"
+            set fd [open $tmpfile w]
+            fconfigure $fd -encoding utf-8
+            puts -nonewline $fd $text
+            close $fd
+            catch {exec sh -c "wl-copy < $tmpfile && rm -f $tmpfile" &}
+            return
+        }
+    }
+
+    # Try xclip for X11 or XWayland
+    if {![catch {exec which xclip}]} {
+        # Write to temp file to avoid shell escaping issues
+        set tmpfile "/tmp/tcl_clipboard_[pid].txt"
+        set fd [open $tmpfile w]
+        fconfigure $fd -encoding utf-8
+        puts -nonewline $fd $text
+        close $fd
+        # Run xclip in background (&) - it forks and waits for paste requests
+        catch {exec sh -c "xclip -selection clipboard -i $tmpfile && rm -f $tmpfile" &}
+        return
+    }
+
+    # Fallback to native clipboard (will have emoji issues on Tk 8.x)
+    clipboard clear
+    clipboard append $text
+}
+
 if {[info commands tk] ne ""} {
     # Declare global widget variables
     global remote_entry url_entry fetch_button acl_path_label selected_item action_buttons_frame f
@@ -135,8 +182,14 @@ if {[info commands tk] ne ""} {
     pack $f.input.path.label -side left
     set path_entry [ttk::entry $f.input.path.entry -width 60]
     pack $path_entry -side left -fill x -expand yes -padx {5 0}
-    $path_entry insert 0 "/"
+    $path_entry insert 0 ""
     $path_entry configure -state readonly
+
+    # Copy path button (workaround for Tk 8.x emoji clipboard bug)
+    button $f.input.path.copy -text "Copy" -command {
+        copy_to_clipboard [$::f.input.path.entry get]
+    }
+    pack $f.input.path.copy -side left -padx {5 0}
 
     # Hidden remote name entry (for rclone configuration)
     set remote_entry [ttk::entry $f.input.remote_hidden -width 20]
@@ -194,7 +247,7 @@ if {[info commands tk] ne ""} {
     }
 
     # Insert root item with dummy child to show expand arrow
-    set root_item [$browser_tree insert {} end -text "📁 OneDrive Root" -values [list "root" "folder" 0]]
+    set root_item [$browser_tree insert {} end -text "OneDrive Root" -values [list "root" "folder" 0]]
     $browser_tree insert $root_item end -text ""  ;# Dummy child for expand arrow
 
     # RIGHT PANE: ACL Display
@@ -396,7 +449,7 @@ proc load_tree_children {tree parent_item folder_id} {
             set name [dict get $item name]
             set item_id [dict get $item id]
             set folder_item [$tree insert $parent_item end \
-                -text "📁 $name" \
+                -text $name \
                 -values [list $item_id "folder" 0]]
             # Insert dummy child to show expand arrow
             $tree insert $folder_item end -text ""
@@ -407,7 +460,7 @@ proc load_tree_children {tree parent_item folder_id} {
             set name [dict get $item name]
             set item_id [dict get $item id]
             $tree insert $parent_item end \
-                -text "📄 $name" \
+                -text $name \
                 -values [list $item_id "file" 1]
         }
 
@@ -461,11 +514,11 @@ proc build_tree_path {tree item} {
         set current $parent
     }
 
-    # Join with / separator, or return / if at root
+    # Join with / separator, or return empty string if at root
     if {[llength $path_parts] == 0} {
-        return "/"
+        return ""
     }
-    return "/[join $path_parts "/"]"
+    return [join $path_parts "/"]
 }
 
 proc on_tree_select {tree} {
