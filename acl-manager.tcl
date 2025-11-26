@@ -89,7 +89,15 @@ proc copy_to_clipboard {text} {
         return
     }
 
-    # Tk 8.x workaround: use external clipboard tools
+    # Tk 8.x workaround: only needed on Linux (X11/Wayland)
+    # On macOS/Windows, native clipboard handles Unicode correctly
+    global tcl_platform
+    if {$tcl_platform(os) ne "Linux"} {
+        clipboard clear
+        clipboard append $text
+        return
+    }
+
     # Detect Wayland vs X11
     set is_wayland [expr {[info exists ::env(WAYLAND_DISPLAY)] && $::env(WAYLAND_DISPLAY) ne ""}]
 
