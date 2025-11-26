@@ -1,0 +1,95 @@
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ OneDrive ACL Lister                                                                          ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃                                                                                              ┃
+┃  URL:  ┌──────────────────────────────────────────────────────────────────────────────────┐  ┃
+┃        │ https://onedrive.live.com/?id=root                                               │  ┃
+┃        └──────────────────────────────────────────────────────────────────────────────────┘  ┃
+┃                                                                                              ┃
+┃  Path: ┌────────────────────────────────────────────────────────────────────────┐ ┌──────┐   ┃
+┃        │                                                                        │ │ Copy │   ┃
+┃        └────────────────────────────────────────────────────────────────────────┘ └──────┘   ┃
+┃                                                                                              ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃                                ┃                                                             ┃
+┃ Browse OneDrive:               ┃  ┌──────────────┐                                           ┃
+┃                                ┃  │  Fetch ACL   │                                           ┃
+┃ ┌────────────────────────────┐ ┃  └──────────────┘                                           ┃
+┃ │▼ OneDrive Root             │ ┃                                                             ┃
+┃ │  ▶ Documents               │ ┃  Item: ┌────────────────────────────────────────────────┐   ┃
+┃ │  ▶ Photos                  │ ┃        │                                                │   ┃
+┃ │  ▶ Shared                  │ ┃        └────────────────────────────────────────────────┘   ┃
+┃ │  ▶ Public                  │ ┃                                                             ┃
+┃ │                            │ ┃  ┌────────────────────────────────────────────────────────┐ ┃
+┃ │                            │ ┃  │Email    User    Roles  Inherited  Link  Link   Expires │ ┃
+┃ │                            │ ┃  │                                   Type  Scope          │ ┃
+┃ │                            │ ┃  ├────────────────────────────────────────────────────────┤ ┃
+┃ │                            │ ┃  │user@example.com                                        │ ┃
+┃ │                            │ ┃  │        alice  owner    No         -     -      -       │ ┃
+┃ │                            │ ┃  │user2@example.com                                       │ ┃
+┃ │                            │ ┃  │        bob    write    No         -     -      -       │ ┃
+┃ │                            │ ┃  │                                                        │ ┃
+┃ │                            │ ┃  │                                                        │ ┃
+┃ │                            │ ┃  │                                                        │ ┃
+┃ │                            │ ┃  │                                                        │ ┃
+┃ │                            │ ┃  │                                                        │ ┃
+┃ │                            │ ┃  │                                                        │ ┃
+┃ │                            │ ┃  │                                                        │ ┃
+┃ │                            │ ┃  └────────────────────────────────────────────────────────┘ ┃
+┃ │                            │ ┃                                                             ┃
+┃ │                            │ ┃  ┌──────────────────┐  ┌─────────────┐                      ┃
+┃ │                            │ ┃  │ Remove Selected  │  │ Invite User │                      ┃
+┃ │                            │ ┃  └──────────────────┘  └─────────────┘                      ┃
+┃ └────────────────────────────┘ ┃                                                             ┃
+┃        (35% width)             ┃                (65% width)                                  ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃ Ready                                                                                        ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+LAYOUT NOTES:
+═══════════════════════════════════════════════════════════════════════════════════════════════
+
+TOP INPUT SECTION:
+  - URL field: Read-only entry showing current OneDrive URL
+  - Path field: Read-only entry showing hierarchical path + Copy button
+
+MAIN SPLIT PANE (Horizontal):
+
+  LEFT PANE (35% width) - "Browse OneDrive":
+    - Treeview showing folder structure
+    - Hierarchical navigation of OneDrive
+    - Expandable folders with ▶/▼ arrows
+    - Scrollbars (horizontal + vertical)
+
+  RIGHT PANE (65% width) - "ACL Display":
+    - "Fetch ACL" button (disabled until item selected)
+    - "Item:" field showing current item path (read-only)
+    - Treeview with columns:
+      * Email (tree column)
+      * User
+      * Roles
+      * Inherited
+      * Link Type
+      * Link Scope
+      * Expires
+    - Color coding:
+      * Light green background = owner
+      * Light blue background = write permission
+      * Light yellow background = read permission
+      * Light gray background = inherited permission
+    - Action buttons:
+      * "Remove Selected" (disabled until ACL fetched and permissions selected)
+      * "Invite User" (disabled until ACL fetched)
+    - Scrollbars (horizontal + vertical)
+    - Multi-select enabled for removing multiple permissions
+    - Right-click context menu: "Copy Email"
+
+BOTTOM:
+  - Status label (blue text, shows "Ready" or operation status)
+
+INTERACTIONS:
+  - Single-click folder in left pane: enables "Fetch ACL" button
+  - Double-click folder: toggles expand/collapse
+  - Click "Fetch ACL": loads permissions into right pane
+  - Select permission(s) in right pane: enables "Remove Selected" button
+  - Right-click on permission: shows context menu with "Copy Email"

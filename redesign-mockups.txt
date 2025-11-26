@@ -1,0 +1,370 @@
+╔═══════════════════════════════════════════════════════════════════════════════════════════════╗
+║                        ONEDRIVE ACL MANAGER - UI REDESIGN MOCKUPS                             ║
+╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+
+
+CONCEPT: Add 2 tabs to the right pane
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Tab 1: "Search Access"       - Find users across folder hierarchy (MILLER COLUMNS)
+Tab 2: "Current Access List"  - View/manage single folder ACL (current functionality)
+
+MILLER COLUMNS BEHAVIOR:
+  • Left column shows ALL users found
+  • Right column is EMPTY until you click a user
+  • When you click a user, right column shows ONLY that user's folders
+  • You can ONLY see one user's folders at a time
+
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ MOCKUP 1: TAB 2 "Current Access List" (ACTIVE)                                              ┃
+┃                                                                                              ┃
+┃ This is the existing functionality, moved into a tab with auto-fetch                        ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃                                                                                              ┃
+┃  URL:  ┌──────────────────────────────────────────────────────────────────────────────────┐  ┃
+┃        │ https://onedrive.live.com/?id=root                                               │  ┃
+┃        └──────────────────────────────────────────────────────────────────────────────────┘  ┃
+┃                                                                                              ┃
+┃  Path: ┌────────────────────────────────────────────────────────────────────────┐ ┌──────┐   ┃
+┃        │ /Documents/Projects                                                    │ │ Copy │   ┃
+┃        └────────────────────────────────────────────────────────────────────────┘ └──────┘   ┃
+┃                                                                                              ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃                                ┃                                                             ┃
+┃ Browse OneDrive:               ┃  ┌─────────────────┬────────────────────┐                   ┃
+┃                                ┃  │ Search Access   │▓Current Access List│                   ┃
+┃ ┌────────────────────────────┐ ┃  └─────────────────┴────────────────────┘                   ┃
+┃ │▼ OneDrive Root             │ ┃                                                             ┃
+┃ │  ▶ Documents               │ ┃  Item: ┌────────────────────────────────────────────────┐   ┃
+┃ │  ▼ Projects                │ ┃        │ /Documents/Projects                            │   ┃
+┃ │    ▶ Project A             │ ┃        └────────────────────────────────────────────────┘   ┃
+┃ │    ▶ Project B             │ ┃                                                             ┃
+┃ │  ▶ Photos                  │ ┃  ┌────────────────────────────────────────────────────────┐ ┃
+┃ │  ▶ Shared                  │ ┃  │Email    User    Roles  Inherited  Link  Link   Expires │ ┃
+┃ │                            │ ┃  │                                   Type  Scope          │ ┃
+┃ │                            │ ┃  ├────────────────────────────────────────────────────────┤ ┃
+┃ │                            │ ┃  │▓alice@example.com▓                                     │ ┃
+┃ │                            │ ┃  │        alice  owner    No         -     -      -       │ ┃
+┃ │                            │ ┃  │  bob@company.com                                       │ ┃
+┃ │                            │ ┃  │        bob    write    No         -     -      -       │ ┃
+┃ │                            │ ┃  │  carol@domain.org                                      │ ┃
+┃ │                            │ ┃  │        carol  read     Yes        -     -      -       │ ┃
+┃ │                            │ ┃  │                                                        │ ┃
+┃ │                            │ ┃  │                                                        │ ┃
+┃ └────────────────────────────┘ ┃  └────────────────────────────────────────────────────────┘ ┃
+┃                                ┃                                                             ┃
+┃                                ┃  ┌──────────────────┐  ┌─────────────┐                      ┃
+┃                                ┃  │ Remove Selected  │  │ Invite User │                      ┃
+┃                                ┃  └──────────────────┘  └─────────────┘                      ┃
+┃                                ┃                                                             ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃ Ready • Loaded 3 permissions for /Documents/Projects                                        ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+CHANGES:
+  • No "Fetch ACL" button - ACL loads automatically when you select a folder or switch to this tab
+  • Same treeview, same buttons (Remove Selected, Invite User)
+  • Same color coding (green=owner, blue=write, yellow=read, gray=inherited)
+
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ MOCKUP 2: TAB 1 "Search Access" (ACTIVE) - BEFORE SCANNING                                  ┃
+┃                                                                                              ┃
+┃ User can search for who has access across multiple folder levels                            ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃                                                                                              ┃
+┃  URL:  ┌──────────────────────────────────────────────────────────────────────────────────┐  ┃
+┃        │ https://onedrive.live.com/?id=root                                               │  ┃
+┃        └──────────────────────────────────────────────────────────────────────────────────┘  ┃
+┃                                                                                              ┃
+┃  Path: ┌────────────────────────────────────────────────────────────────────────┐ ┌──────┐   ┃
+┃        │ /Documents/Projects                                                    │ │ Copy │   ┃
+┃        └────────────────────────────────────────────────────────────────────────┘ └──────┘   ┃
+┃                                                                                              ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃                                ┃                                                             ┃
+┃ Browse OneDrive:               ┃  ┌─────────────────┬────────────────────┐                   ┃
+┃                                ┃  │▓Search Access  ▓│ Current Access List│                   ┃
+┃ ┌────────────────────────────┐ ┃  └─────────────────┴────────────────────┘                   ┃
+┃ │▼ OneDrive Root             │ ┃                                                             ┃
+┃ │  ▶ Documents               │ ┃  ╔════════════════════════════════════════════════════════╗ ┃
+┃ │  ▼ Projects                │ ┃  ║ SEARCH CRITERIA                                        ║ ┃
+┃ │    ▶ Project A             │ ┃  ╟────────────────────────────────────────────────────────╢ ┃
+┃ │    ▶ Project B             │ ┃  ║                                                        ║ ┃
+┃ │  ▶ Photos                  │ ┃  ║ User Email (optional):                                 ║ ┃
+┃ │  ▶ Shared                  │ ┃  ║ ┌────────────────────────────────────────────────────┐ ║ ┃
+┃ │                            │ ┃  ║ │                                                    │ ║ ┃
+┃ │                            │ ┃  ║ └────────────────────────────────────────────────────┘ ║ ┃
+┃ │                            │ ┃  ║                                                        ║ ┃
+┃ │                            │ ┃  ║ Keyword in email/name (optional):                      ║ ┃
+┃ │                            │ ┃  ║ ┌────────────────────────────────────────────────────┐ ║ ┃
+┃ │                            │ ┃  ║ │                                                    │ ║ ┃
+┃ │                            │ ┃  ║ └────────────────────────────────────────────────────┘ ║ ┃
+┃ │                            │ ┃  ║                                                        ║ ┃
+┃ │                            │ ┃  ║ Search Depth: ┌──┐  (levels below selected folder)    ║ ┃
+┃ │                            │ ┃  ║               │2 │                                     ║ ┃
+┃ │                            │ ┃  ║               └──┘                                     ║ ┃
+┃ │                            │ ┃  ║                                                        ║ ┃
+┃ │                            │ ┃  ║        ┌──────────────┐                                ║ ┃
+┃ │                            │ ┃  ║        │ Start Scan   │                                ║ ┃
+┃ └────────────────────────────┘ ┃  ║        └──────────────┘                                ║ ┃
+┃                                ┃  ║                                                        ║ ┃
+┃                                ┃  ╚════════════════════════════════════════════════════════╝ ┃
+┃                                ┃                                                             ┃
+┃                                ┃  ╔════════════════════════════════════════════════════════╗ ┃
+┃                                ┃  ║ SCAN RESULTS                                           ║ ┃
+┃                                ┃  ╟────────────────────────────────────────────────────────╢ ┃
+┃                                ┃  ║                                                        ║ ┃
+┃                                ┃  ║  (No scan performed yet. Click "Start Scan" above.)    ║ ┃
+┃                                ┃  ║                                                        ║ ┃
+┃                                ┃  ╚════════════════════════════════════════════════════════╝ ┃
+┃                                ┃                                                             ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃ Select a folder and configure search to begin                                               ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+CONTROLS:
+  • User Email: Search for specific user (leave empty to find all users)
+  • Keyword: Filter by text in email or display name
+  • Search Depth: How many levels deep to scan (default 2)
+  • Start Scan: Begin searching from selected folder
+
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ MOCKUP 3: TAB 1 "Search Access" - AFTER SCAN, NO USER SELECTED YET                          ┃
+┃                                                                                              ┃
+┃ Right column is EMPTY - waiting for you to click a user                                     ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃                                                                                              ┃
+┃  URL:  ┌──────────────────────────────────────────────────────────────────────────────────┐  ┃
+┃        │ https://onedrive.live.com/?id=root                                               │  ┃
+┃        └──────────────────────────────────────────────────────────────────────────────────┘  ┃
+┃                                                                                              ┃
+┃  Path: ┌────────────────────────────────────────────────────────────────────────────────┐   ┃
+┃        │ /Documents/Projects                                                            │   ┃
+┃        └────────────────────────────────────────────────────────────────────────────────┘   ┃
+┃                                                                                              ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃                                ┃                                                             ┃
+┃ Browse OneDrive:               ┃  ┌─────────────────┬────────────────────┐                   ┃
+┃                                ┃  │▓Search Access  ▓│ Current Access List│                   ┃
+┃ ┌────────────────────────────┐ ┃  └─────────────────┴────────────────────┘                   ┃
+┃ │▼ OneDrive Root             │ ┃                                                             ┃
+┃ │  ▶ Documents               │ ┃  ╔════════════════════════════════════════════════════════╗ ┃
+┃ │  ▼ Projects                │ ┃  ║ SEARCH: Keyword: [alice]  Depth: [2]                   ║ ┃
+┃ │    ▶ Project A             │ ┃  ║ ┌──────────────┐  ┌────────────┐                       ║ ┃
+┃ │    ▶ Project B             │ ┃  ║ │ Start Scan   │  │ Clear      │                       ║ ┃
+┃ │  ▶ Photos                  │ ┃  ║ └──────────────┘  └────────────┘                       ║ ┃
+┃ │  ▶ Shared                  │ ┃  ╚════════════════════════════════════════════════════════╝ ┃
+┃ │                            │ ┃                                                             ┃
+┃ │                            │ ┃  ╔═══════════════════════════════════════════════════════╗  ┃
+┃ │                            │ ┃  ║ SCAN RESULTS (Found 3 users)                          ║  ┃
+┃ │                            │ ┃  ╟───────────────────────────────────────────────────────╢  ┃
+┃ │                            │ ┃  ║                                                       ║  ┃
+┃ │                            │ ┃  ║ ┌──────────────────────┬────────────────────────────┐ ║  ┃
+┃ │                            │ ┃  ║ │ Users Found (3)      │ Folders With Access        │ ║  ┃
+┃ │                            │ ┃  ║ ├──────────────────────┼────────────────────────────┤ ║  ┃
+┃ │                            │ ┃  ║ │                      │                            │ ║  ┃
+┃ └────────────────────────────┘ ┃  ║ │  alice@example.com   │                            │ ║  ┃
+┃                                ┃  ║ │  alice.smith@co.uk   │   (Select a user on the    │ ║  ┃
+┃                                ┃  ║ │  bob@company.com     │    left to view their      │ ║  ┃
+┃                                ┃  ║ │                      │    folder access)          │ ║  ┃
+┃                                ┃  ║ │                      │                            │ ║  ┃
+┃                                ┃  ║ │                      │                            │ ║  ┃
+┃                                ┃  ║ │                      │                            │ ║  ┃
+┃                                ┃  ║ │                      │                            │ ║  ┃
+┃                                ┃  ║ │                      │                            │ ║  ┃
+┃                                ┃  ║ │                      │                            │ ║  ┃
+┃                                ┃  ║ └──────────────────────┴────────────────────────────┘ ║  ┃
+┃                                ┃  ║                                                       ║  ┃
+┃                                ┃  ║          ┌────────────────────────────────┐           ║  ┃
+┃                                ┃  ║          │ Remove Access From Selected    │ Disabled  ║  ┃
+┃                                ┃  ║          └────────────────────────────────┘           ║  ┃
+┃                                ┃  ║                                                       ║  ┃
+┃                                ┃  ╚═══════════════════════════════════════════════════════╝  ┃
+┃                                ┃                                                             ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃ Scanned 2 levels • Found 3 users • Click a user to view their folders                       ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ MOCKUP 4: TAB 1 "Search Access" - USER SELECTED (alice@example.com)                         ┃
+┃                                                                                              ┃
+┃ NOW the right column shows alice's folders. Other users still visible in left column.       ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃                                                                                              ┃
+┃  URL:  ┌──────────────────────────────────────────────────────────────────────────────────┐  ┃
+┃        │ https://onedrive.live.com/?id=root                                               │  ┃
+┃        └──────────────────────────────────────────────────────────────────────────────────┘  ┃
+┃                                                                                              ┃
+┃  Path: ┌────────────────────────────────────────────────────────────────────────────────┐   ┃
+┃        │ /Documents/Projects                                                            │   ┃
+┃        └────────────────────────────────────────────────────────────────────────────────┘   ┃
+┃                                                                                              ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃                                ┃                                                             ┃
+┃ Browse OneDrive:               ┃  ┌─────────────────┬────────────────────┐                   ┃
+┃                                ┃  │▓Search Access  ▓│ Current Access List│                   ┃
+┃ ┌────────────────────────────┐ ┃  └─────────────────┴────────────────────┘                   ┃
+┃ │▼ OneDrive Root             │ ┃                                                             ┃
+┃ │  ▶ Documents               │ ┃  ╔════════════════════════════════════════════════════════╗ ┃
+┃ │  ▼ Projects                │ ┃  ║ SEARCH: Keyword: [alice]  Depth: [2]                   ║ ┃
+┃ │    ▶ Project A             │ ┃  ║ ┌──────────────┐  ┌────────────┐                       ║ ┃
+┃ │    ▶ Project B             │ ┃  ║ │ Start Scan   │  │ Clear      │                       ║ ┃
+┃ │  ▶ Photos                  │ ┃  ║ └──────────────┘  └────────────┘                       ║ ┃
+┃ │  ▶ Shared                  │ ┃  ╚════════════════════════════════════════════════════════╝ ┃
+┃ │                            │ ┃                                                             ┃
+┃ │                            │ ┃  ╔═══════════════════════════════════════════════════════╗  ┃
+┃ │                            │ ┃  ║ SCAN RESULTS (Found 3 users)                          ║  ┃
+┃ │                            │ ┃  ╟───────────────────────────────────────────────────────╢  ┃
+┃ │                            │ ┃  ║                                                       ║  ┃
+┃ │                            │ ┃  ║ ┌──────────────────────┬────────────────────────────┐ ║  ┃
+┃ │                            │ ┃  ║ │ Users Found (3)      │ alice@example.com's folders│ ║  ┃
+┃ │                            │ ┃  ║ ├──────────────────────┼────────────────────────────┤ ║  ┃
+┃ └────────────────────────────┘ ┃  ║ │▓alice@example.com   ▓│  /Documents/Projects       │ ║  ┃
+┃                                ┃  ║ │  alice.smith@co.uk   │▓/Documents/Projects/A     ▓│ ║  ┃
+┃                                ┃  ║ │  bob@company.com     │▓/Documents/Projects/B     ▓│ ║  ┃
+┃                                ┃  ║ │                      │  /Documents/Shared (inh.)  │ ║  ┃
+┃                                ┃  ║ │                      │                            │ ║  ┃
+┃                                ┃  ║ │                      │                            │ ║  ┃
+┃                                ┃  ║ │                      │                            │ ║  ┃
+┃                                ┃  ║ │                      │                            │ ║  ┃
+┃                                ┃  ║ │                      │                            │ ║  ┃
+┃                                ┃  ║ │                      │                            │ ║  ┃
+┃                                ┃  ║ └──────────────────────┴────────────────────────────┘ ║  ┃
+┃                                ┃  ║                                                       ║  ┃
+┃                                ┃  ║          ┌────────────────────────────────┐           ║  ┃
+┃                                ┃  ║          │ Remove Access From Selected    │ Enabled   ║  ┃
+┃                                ┃  ║          └────────────────────────────────┘           ║  ┃
+┃                                ┃  ║                                                       ║  ┃
+┃                                ┃  ╚═══════════════════════════════════════════════════════╝  ┃
+┃                                ┃                                                             ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃ alice@example.com selected • 4 folders • 2 selected for removal (non-inherited)             ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ MOCKUP 5: TAB 1 "Search Access" - DIFFERENT USER SELECTED (bob@company.com)                 ┃
+┃                                                                                              ┃
+┃ When you click bob, the right column changes to show ONLY bob's folders                     ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃                                                                                              ┃
+┃  URL:  ┌──────────────────────────────────────────────────────────────────────────────────┐  ┃
+┃        │ https://onedrive.live.com/?id=root                                               │  ┃
+┃        └──────────────────────────────────────────────────────────────────────────────────┘  ┃
+┃                                                                                              ┃
+┃  Path: ┌────────────────────────────────────────────────────────────────────────────────┐   ┃
+┃        │ /Documents/Projects                                                            │   ┃
+┃        └────────────────────────────────────────────────────────────────────────────────┘   ┃
+┃                                                                                              ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃                                ┃                                                             ┃
+┃ Browse OneDrive:               ┃  ┌─────────────────┬────────────────────┐                   ┃
+┃                                ┃  │▓Search Access  ▓│ Current Access List│                   ┃
+┃ ┌────────────────────────────┐ ┃  └─────────────────┴────────────────────┘                   ┃
+┃ │▼ OneDrive Root             │ ┃                                                             ┃
+┃ │  ▶ Documents               │ ┃  ╔════════════════════════════════════════════════════════╗ ┃
+┃ │  ▼ Projects                │ ┃  ║ SEARCH: Keyword: [alice]  Depth: [2]                   ║ ┃
+┃ │    ▶ Project A             │ ┃  ║ ┌──────────────┐  ┌────────────┐                       ║ ┃
+┃ │    ▶ Project B             │ ┃  ║ │ Start Scan   │  │ Clear      │                       ║ ┃
+┃ │  ▶ Photos                  │ ┃  ║ └──────────────┘  └────────────┘                       ║ ┃
+┃ │  ▶ Shared                  │ ┃  ╚════════════════════════════════════════════════════════╝ ┃
+┃ │                            │ ┃                                                             ┃
+┃ │                            │ ┃  ╔═══════════════════════════════════════════════════════╗  ┃
+┃ │                            │ ┃  ║ SCAN RESULTS (Found 3 users)                          ║  ┃
+┃ │                            │ ┃  ╟───────────────────────────────────────────────────────╢  ┃
+┃ │                            │ ┃  ║                                                       ║  ┃
+┃ │                            │ ┃  ║ ┌──────────────────────┬────────────────────────────┐ ║  ┃
+┃ │                            │ ┃  ║ │ Users Found (3)      │ bob@company.com's folders  │ ║  ┃
+┃ │                            │ ┃  ║ ├──────────────────────┼────────────────────────────┤ ║  ┃
+┃ └────────────────────────────┘ ┃  ║ │  alice@example.com   │  /Documents/Projects/B     │ ║  ┃
+┃                                ┃  ║ │  alice.smith@co.uk   │                            │ ║  ┃
+┃                                ┃  ║ │▓bob@company.com     ▓│                            │ ║  ┃
+┃                                ┃  ║ │                      │  (bob only has access to   │ ║  ┃
+┃                                ┃  ║ │                      │   one folder)              │ ║  ┃
+┃                                ┃  ║ │                      │                            │ ║  ┃
+┃                                ┃  ║ │                      │                            │ ║  ┃
+┃                                ┃  ║ │                      │                            │ ║  ┃
+┃                                ┃  ║ │                      │                            │ ║  ┃
+┃                                ┃  ║ │                      │                            │ ║  ┃
+┃                                ┃  ║ └──────────────────────┴────────────────────────────┘ ║  ┃
+┃                                ┃  ║                                                       ║  ┃
+┃                                ┃  ║          ┌────────────────────────────────┐           ║  ┃
+┃                                ┃  ║          │ Remove Access From Selected    │ Disabled  ║  ┃
+┃                                ┃  ║          └────────────────────────────────┘           ║  ┃
+┃                                ┃  ║                                                       ║  ┃
+┃                                ┃  ╚═══════════════════════════════════════════════════════╝  ┃
+┃                                ┃                                                             ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃ bob@company.com selected • 1 folder • None selected                                         ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+
+╔═══════════════════════════════════════════════════════════════════════════════════════════════╗
+║ KEY POINTS: MILLER COLUMN BEHAVIOR                                                            ║
+╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+
+1. LEFT COLUMN: Shows ALL users found (always visible)
+
+2. RIGHT COLUMN: Shows folders for ONLY the selected user
+   • Empty until you click a user
+   • Updates when you click a different user
+   • Shows ONLY one user's folders at a time
+
+3. This is NOT a table where you see all users' folders simultaneously
+   • You can only see one user's folder list at a time
+   • Like macOS Finder columns or Windows Explorer navigation
+
+4. WORKFLOW:
+   Step 1: Scan → Left column populates with all users
+   Step 2: Click alice → Right column shows alice's 4 folders
+   Step 3: Click bob → Right column REPLACES with bob's 1 folder
+   Step 4: Select folders in right column → Enable remove button
+
+
+╔═══════════════════════════════════════════════════════════════════════════════════════════════╗
+║ SUMMARY OF CHANGES                                                                            ║
+╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+
+RIGHT PANE BECOMES TABBED:
+
+  Tab 1: "Search Access" (NEW)
+    ├─ Search form (email, keyword, depth)
+    ├─ Miller columns (user list → folder list)
+    │  ├─ Left: ALL users
+    │  └─ Right: Selected user's folders only
+    └─ Remove button (for selected folders)
+
+  Tab 2: "Current Access List" (EXISTING)
+    ├─ Item path (readonly)
+    ├─ Permissions table
+    └─ Remove Selected / Invite User buttons
+    └─ AUTO-FETCHES when you select a folder (no fetch button)
+
+
+COLOR CODING:
+
+  Tab 2 (Current Access):
+    • Green background   = owner
+    • Blue background    = write permission
+    • Yellow background  = read permission
+    • Gray background    = inherited
+
+  Tab 1 (Search Access):
+    • Blue background    = write permission
+    • Yellow background  = read permission
+    • Gray background    = inherited (cannot remove)
+
+
+SELECTION INDICATORS:
+
+  Active Tab:
+    • ▓Inverted background▓ shows which tab is currently active
+    • Example: │▓Search Access  ▓│ Current Access List│
+
+  Miller Column Selection:
+    • Left column: ▓inverted background▓ shows selected user
+    • Right column: ▓inverted background▓ shows selected folders (multi-select)
