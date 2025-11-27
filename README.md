@@ -6,9 +6,9 @@ If you've shared your OneDrive folders with friends, family, or collaborators ov
 
 If you've stopped working with someone and you're worried they might still have access to your personal files somewhere deep in your folder structure...
 
-If you need to know "Who can see my tax documents?" or "Who has access to my family photos?" and you can't get a clear answer...
-
 If you're trying to clean up your OneDrive and need to audit who can see what before sharing more files...
+
+When you know which folder to check, you can find out "Who can see my tax documents?" or "Who has access to my family photos?" within OneDrive. But that doesn't help if you don't know which folders were shared and wanted to search or have an overview.
 
 **You need this tool.**
 
