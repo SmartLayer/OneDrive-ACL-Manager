@@ -30,7 +30,6 @@ package require json
 package require json::write
 package require tls
 package require cmdline
-package require sha256
 
 # Configure TLS for HTTPS requests
 ::http::register https 443 [list ::tls::socket -autoservername 1]
@@ -66,10 +65,10 @@ set ::oauth(token_url)     "https://login.microsoftonline.com/common/oauth2/v2.0
 set ::oauth(scope)         "Files.Read Files.ReadWrite Files.ReadWrite.All Sites.Manage.All offline_access"
 set ::oauth(auth_code)     ""
 
-# Hardcoded ignore list for items to hide from browser and recursive scans (using SHA-256 hashes)
-set ignore_list [list \
-    "214042754127a4ba539dcf961a6f4c850a09e742fe7a4f665e3050a9b846d590" \
-    "679c0ef79705fb1f52a685d7f69ce72adbe9c9bb2926191c4258da22d7f2cef5"]
+# Glob patterns for items to hide from browser and recursive scans
+set ignore_patterns [list \
+    ".Trash-*" \
+    "*Tsiko*"]
 set ::serverSock           ""
 set ::oauth_modal_result   0  ;# Result from OAuth modal dialog (0=failure/cancel, 1=success)
 
@@ -391,10 +390,9 @@ proc debug_log {message} {
 }
 
 proc is_ignored {item_name} {
-    global ignore_list
-    set item_hash [sha2::sha256 $item_name]
-    foreach hashed_pattern $ignore_list {
-        if {$item_hash eq $hashed_pattern} {
+    global ignore_patterns
+    foreach pattern $ignore_patterns {
+        if {[string match $pattern $item_name]} {
             return 1
         }
     }
@@ -1022,9 +1020,8 @@ proc get_rclone_conf_handler {} {
         set conf_path [file join $::env(HOME) .config rclone rclone.conf]
     }
     if {![file exists $conf_path]} {
-        puts "Error: rclone config not found at $conf_path"
-        puts "Please configure rclone first: rclone config"
-        return -code error "rclone.conf file not found"
+        debug_log "rclone.conf not found at $conf_path (this is OK if using token.json)"
+        return ""
     }
     return [open $conf_path r]
 }
@@ -1069,6 +1066,11 @@ proc find_onedrive_remotes {} {
     # Find all OneDrive remotes in rclone configuration
     
     set rconf_handler [get_rclone_conf_handler]
+    if {$rconf_handler eq ""} {
+        # No rclone.conf available
+        return {}
+    }
+    
     set onedrive_remotes {}
     set config_data [read $rconf_handler]
     close $rconf_handler
@@ -1084,7 +1086,6 @@ proc find_onedrive_remotes {} {
             }
         }
     }
-    close $rconf_handler
     
     return $onedrive_remotes
 }
@@ -1099,8 +1100,7 @@ proc parse_rclone_conf_token {rclone_remote} {
         set onedrive_remotes [find_onedrive_remotes]
         
         if {[llength $onedrive_remotes] == 0} {
-            puts "Error: No OneDrive remotes found in rclone configuration"
-            puts "Please configure OneDrive first: rclone config"
+            debug_log "No OneDrive remotes found in rclone configuration (this is OK if using token.json)"
             return [list 0 {}]
         }
         
@@ -1116,7 +1116,14 @@ proc parse_rclone_conf_token {rclone_remote} {
     
     # Read config file
     set rconf_handler [get_rclone_conf_handler]
+    if {$rconf_handler eq ""} {
+        # No rclone.conf available
+        debug_log "No rclone.conf available (this is OK if using token.json)"
+        return [list 0 {}]
+    }
+    
     set config_data [read $rconf_handler]
+    close $rconf_handler
     
     # Parse INI file format properly
     set in_remote_section 0
@@ -1159,8 +1166,7 @@ proc parse_rclone_conf_token {rclone_remote} {
     }
     
     if {$token_json eq ""} {
-        puts "Error: No token found for remote '$rclone_remote'"
-        puts "Please authenticate first: rclone authorize onedrive"
+        debug_log "No token found for remote '$rclone_remote' (this is OK if using token.json)"
         return [list 0 {}]
     }
     
@@ -1310,6 +1316,20 @@ proc get_access_token {rclone_remote {require_capability ""} {return_format "sim
     lassign [parse_rclone_conf_token $rclone_remote] parse_success token_dict
     
     if {!$parse_success} {
+        # Both token.json and rclone.conf failed - show helpful error
+        puts "❌ No valid authentication found."
+        puts ""
+        puts "You need to authenticate with OneDrive. You have two options:"
+        puts ""
+        puts "Option 1: Use browser authentication (recommended)"
+        puts "  1. Run this program in GUI mode: wish acl-manager.tcl"
+        puts "  2. Click any operation requiring permissions (Invite/Remove)"
+        puts "  3. Complete browser authentication"
+        puts ""
+        puts "Option 2: Use rclone"
+        puts "  1. Install rclone: https://rclone.org"
+        puts "  2. Configure OneDrive: rclone config"
+        puts ""
         return [expr {$return_format eq "simple" ? "" : [list "" "unknown" "unknown"]}]
     }
     
