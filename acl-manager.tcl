@@ -30,6 +30,7 @@ package require json
 package require json::write
 package require tls
 package require cmdline
+package require sha256
 
 # Configure TLS for HTTPS requests
 ::http::register https 443 [list ::tls::socket -autoservername 1]
@@ -64,6 +65,11 @@ set ::oauth(auth_url)      "https://login.microsoftonline.com/common/oauth2/v2.0
 set ::oauth(token_url)     "https://login.microsoftonline.com/common/oauth2/v2.0/token"
 set ::oauth(scope)         "Files.Read Files.ReadWrite Files.ReadWrite.All Sites.Manage.All offline_access"
 set ::oauth(auth_code)     ""
+
+# Hardcoded ignore list for items to hide from browser and recursive scans (using SHA-256 hashes)
+set ignore_list [list \
+    "214042754127a4ba539dcf961a6f4c850a09e742fe7a4f665e3050a9b846d590" \
+    "679c0ef79705fb1f52a685d7f69ce72adbe9c9bb2926191c4258da22d7f2cef5"]
 set ::serverSock           ""
 set ::oauth_modal_result   0  ;# Result from OAuth modal dialog (0=failure/cancel, 1=success)
 
@@ -384,6 +390,17 @@ proc debug_log {message} {
     }
 }
 
+proc is_ignored {item_name} {
+    global ignore_list
+    set item_hash [sha2::sha256 $item_name]
+    foreach hashed_pattern $ignore_list {
+        if {$item_hash eq $hashed_pattern} {
+            return 1
+        }
+    }
+    return 0
+}
+
 # ============================================================================
 # Treeview Browser Functions
 # ============================================================================
@@ -442,6 +459,12 @@ proc load_tree_children {tree parent_item folder_id} {
 
         foreach child $children {
             set child_name [dict get $child name]
+            
+            # Skip ignored items
+            if {[is_ignored $child_name]} {
+                continue
+            }
+            
             set child_id [dict get $child id]
             set is_folder [dict exists $child folder]
 
@@ -2939,6 +2962,13 @@ proc scan_items_recursive {folder_id access_token max_depth current_depth folder
             set children [dict get $children_dict value]
             
             foreach child $children {
+                set child_name [dict get $child name]
+                
+                # Skip ignored items
+                if {[is_ignored $child_name]} {
+                    continue
+                }
+                
                 set is_folder [dict exists $child folder]
                 set is_file [dict exists $child file]
                 
