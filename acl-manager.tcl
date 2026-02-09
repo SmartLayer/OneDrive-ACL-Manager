@@ -2654,7 +2654,7 @@ proc on_remove_selected_click {} {
     
     foreach item $selection {
         set values [$tree item $item -values]
-        set permission_id [lindex $values 2]
+        set permission_id [lindex $values 6]
 
         set remove_result [remove_permission $current_item_id $permission_id $access_token]
         set remove_status [lindex $remove_result 0]
