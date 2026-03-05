@@ -47,6 +47,7 @@ proc bgerror {message} {
 
 # Global variables
 set debug_mode 0  ;# Set to 1 to enable debug logging (WARNING: may fail with unicode in folder names)
+set quiet_mode 0  ;# Set to 1 to suppress progress output (used by --format csv)
 set access_token ""
 set item_path ""
 set remote_name "OneDrive"
@@ -666,6 +667,114 @@ proc url_encode {path} {
     return $encoded
 }
 
+proc url_decode {str} {
+    # Decode %XX URL-encoded sequences back to characters
+    # Companion to url_encode above
+    set decoded ""
+    set i 0
+    set len [string length $str]
+    while {$i < $len} {
+        set ch [string index $str $i]
+        if {$ch eq "%" && $i + 2 < $len} {
+            set hex [string range $str [expr {$i+1}] [expr {$i+2}]]
+            if {[string is xdigit -strict $hex]} {
+                append decoded [binary format c [scan $hex %x]]
+                incr i 3
+                continue
+            }
+        } elseif {$ch eq "+"} {
+            append decoded " "
+            incr i
+            continue
+        }
+        append decoded $ch
+        incr i
+    }
+    return [encoding convertfrom utf-8 $decoded]
+}
+
+proc convert_onedrive_url_to_path {url} {
+    # Convert a OneDrive web URL to a relative path
+    # Supports onedrive.live.com and *.sharepoint.com URLs
+    # Returns the original string unchanged if not a OneDrive URL
+    if {![string match "https://onedrive.live.com*" $url] && ![string match "https://*.sharepoint.com*" $url]} {
+        return $url
+    }
+
+    # Extract the 'id' query parameter
+    if {![regexp {[?&]id=([^&]*)} $url -> id_value]} {
+        return $url
+    }
+
+    set decoded [url_decode $id_value]
+
+    # Strip /personal/{drive_id}/Documents/ prefix
+    if {[regexp {^/personal/[^/]+/Documents/(.+)$} $decoded -> rel_path]} {
+        return $rel_path
+    } elseif {[regexp {^/personal/[^/]+/Documents/?$} $decoded]} {
+        return "/"
+    }
+
+    # Fallback: return decoded id as-is
+    return $decoded
+}
+
+proc format_file_size {bytes} {
+    # Convert bytes to human-readable size string
+    if {$bytes eq "" || ![string is integer -strict $bytes]} {
+        return "N/A"
+    }
+    if {$bytes < 1024} {
+        return "${bytes} B"
+    } elseif {$bytes < 1048576} {
+        return [format "%.1f KB" [expr {$bytes / 1024.0}]]
+    } elseif {$bytes < 1073741824} {
+        return [format "%.1f MB" [expr {$bytes / 1048576.0}]]
+    } else {
+        return [format "%.2f GB" [expr {$bytes / 1073741824.0}]]
+    }
+}
+
+proc extract_item_metadata {item_dict} {
+    # Safely extract metadata fields from a Graph API item dict
+    # Returns a dict with keys: name, type, created_by, created_date, modified_by, modified_date, size
+    set meta {}
+
+    dict set meta name [expr {[dict exists $item_dict name] ? [dict get $item_dict name] : "N/A"}]
+
+    if {[dict exists $item_dict folder]} {
+        dict set meta type "folder"
+    } elseif {[dict exists $item_dict file]} {
+        dict set meta type "file"
+    } else {
+        dict set meta type "item"
+    }
+
+    if {[dict exists $item_dict createdBy user displayName]} {
+        dict set meta created_by [dict get $item_dict createdBy user displayName]
+    } else {
+        dict set meta created_by "N/A"
+    }
+
+    dict set meta created_date [expr {[dict exists $item_dict createdDateTime] ? [dict get $item_dict createdDateTime] : "N/A"}]
+
+    if {[dict exists $item_dict lastModifiedBy user displayName]} {
+        dict set meta modified_by [dict get $item_dict lastModifiedBy user displayName]
+    } else {
+        dict set meta modified_by "N/A"
+    }
+
+    dict set meta modified_date [expr {[dict exists $item_dict lastModifiedDateTime] ? [dict get $item_dict lastModifiedDateTime] : "N/A"}]
+
+    if {[dict exists $item_dict size]} {
+        dict set meta size [format_file_size [dict get $item_dict size]]
+    } else {
+        dict set meta size "N/A"
+    }
+
+    return $meta
+}
+
 proc extract_users_from_perm {perm} {
     # Extract ALL users from grantedTo or grantedToIdentities
     # Returns list of {displayName email} pairs (can be multiple for grantedToIdentities)
@@ -885,13 +994,30 @@ proc detect_special_folders {all_folders root_users_dict} {
     return $special_folders
 }
 
-proc print_recursive_acl {root_path root_permissions all_folders max_depth} {
+proc print_item_metadata {item_dict} {
+    # Print formatted metadata block for an item
+    if {[llength $item_dict] == 0} {
+        return
+    }
+    set meta [extract_item_metadata $item_dict]
+    puts "📋 Item Info:"
+    puts [format "   %-17s %s" "Name:" [dict get $meta name]]
+    puts [format "   %-17s %s" "Type:" [dict get $meta type]]
+    puts [format "   %-17s %s" "Created by:" [dict get $meta created_by]]
+    puts [format "   %-17s %s" "Created:" [dict get $meta created_date]]
+    puts [format "   %-17s %s" "Modified by:" [dict get $meta modified_by]]
+    puts [format "   %-17s %s" "Modified:" [dict get $meta modified_date]]
+    puts [format "   %-17s %s" "Size:" [dict get $meta size]]
+    puts ""
+}
+
+proc print_recursive_acl {root_path root_permissions all_folders max_depth {item_dict {}}} {
     # Print ACL information in a user-centric recursive format
     # Shows: 1) Root permissions, 2) Additional users in subfolders, 3) Special folders
-    
+
     set root_users_dict [extract_users_from_permissions $root_permissions]
     set root_emails [lsort [dict keys $root_users_dict]]
-    
+
     # Count unique users and folders
     set all_users_dict $root_users_dict
     set subfolder_count 0
@@ -909,7 +1035,7 @@ proc print_recursive_acl {root_path root_permissions all_folders max_depth} {
         }
     }
     set total_users [dict size $all_users_dict]
-    
+
     # Display header
     if {$max_depth == 0} {
         puts "\n[string repeat "=" 80]"
@@ -920,7 +1046,10 @@ proc print_recursive_acl {root_path root_permissions all_folders max_depth} {
         puts "=== ACL for \"$root_path\" (recursive scan, max depth: $max_depth) ==="
         puts "[string repeat "=" 80]\n"
     }
-    
+
+    # Show item metadata if available
+    print_item_metadata $item_dict
+
     # Section 1: Root Folder Permissions
     puts "📊 Root Folder Permissions:"
     if {[llength $root_emails] == 0} {
@@ -1010,6 +1139,37 @@ proc print_recursive_acl {root_path root_permissions all_folders max_depth} {
         puts "[string repeat "-" 80]"
         puts "Summary: $total_users unique user(s) across 1 root folder + $subfolder_count subfolder(s)"
         puts "[string repeat "-" 80]\n"
+    }
+}
+
+proc print_csv_acl {root_path root_permissions all_folders max_depth} {
+    # Print ACL in CSV format for machine parsing
+
+    if {$max_depth == 0} {
+        # Non-recursive: email,role
+        puts "email,role"
+        set root_users_dict [extract_users_from_permissions $root_permissions]
+        foreach email [lsort [dict keys $root_users_dict]] {
+            set role [dict get $root_users_dict $email]
+            puts "$email,$role"
+        }
+    } else {
+        # Recursive: path,email,role
+        puts "path,email,role"
+        foreach folder $all_folders {
+            set folder_path [dict get $folder path]
+            set folder_perms [dict get $folder permissions]
+            set folder_users [extract_users_from_permissions $folder_perms]
+            foreach email [lsort [dict keys $folder_users]] {
+                set role [dict get $folder_users $email]
+                # Quote path if it contains commas
+                if {[string match *,* $folder_path]} {
+                    puts "\"$folder_path\",$email,$role"
+                } else {
+                    puts "$folder_path,$email,$role"
+                }
+            }
+        }
     }
 }
 
@@ -2908,7 +3068,7 @@ proc scan_items_recursive {folder_id access_token max_depth current_depth folder
     
     # Show progress every 10 folders
     set total_checked [llength $checked]
-    if {$total_checked % 10 == 0} {
+    if {$total_checked % 10 == 0 && !$::quiet_mode} {
         puts "   📁 Scanned $total_checked folders..."
     }
     
@@ -3129,7 +3289,7 @@ proc cli_resolve_path_for_command {path remote_name} {
     return [list $access_token $item_id $item_dict]
 }
 
-proc remove_user_permissions_cli {item_id user_email max_depth item_type dry_run remote_name} {
+proc remove_user_permissions_cli {item_id user_email max_depth item_type dry_run remote_name {auto_yes 0}} {
     # CLI wrapper for removing user permissions
     # Initial display messages should be handled by caller
     
@@ -3216,15 +3376,17 @@ proc remove_user_permissions_cli {item_id user_email max_depth item_type dry_run
         return
     }
     
-    # Confirm before removal
-    puts "⚠️  This will remove $user_email's access from [llength $items_to_remove] item(s)."
-    puts -nonewline {Continue? [Y/n]: }
-    flush stdout
-    set response [gets stdin]
-    
-    if {$response ne "y" && $response ne "Y" && $response ne ""} {
-        puts "❌ Cancelled by user"
-        return
+    # Confirm before removal (skip if --yes)
+    if {!$auto_yes} {
+        puts "⚠️  This will remove $user_email's access from [llength $items_to_remove] item(s)."
+        puts -nonewline {Continue? [Y/n]: }
+        flush stdout
+        set response [gets stdin]
+
+        if {$response ne "y" && $response ne "Y" && $response ne ""} {
+            puts "❌ Cancelled by user"
+            return
+        }
     }
     
     # Perform removals
@@ -3668,8 +3830,11 @@ proc main {argc argv} {
         {recursive "Include children in scan (recursive, default depth: 3)"}
         {max-depth.arg "0" "Max depth (default: 3 with -r, 0 otherwise)"}
         {type.arg "folders" "Item type: folders|files|both (default: folders)"}
+        {format.arg "text" "Output format: text|csv (default: text)"}
         {dry-run "Preview changes (with --remove-user)"}
         {read-only "Grant read-only access (with --invite, default: read/write)"}
+        {y "Skip confirmation prompts (with --remove-user)"}
+        {yes "Skip confirmation prompts (with --remove-user)"}
         {debug "Enable debug output"}
         {remote.arg "OneDrive" "OneDrive remote name"}
     }
@@ -3682,14 +3847,25 @@ proc main {argc argv} {
     
     # Extract PATH (first remaining positional argument after cmdline processing)
     set path [lindex $argv 0]
-    
+
+    # Convert OneDrive web URL to path if needed
+    if {[string match "https://*" $path]} {
+        set converted [convert_onedrive_url_to_path $path]
+        if {$converted ne $path} {
+            puts "🔗 Converted URL to path: $converted"
+            set path $converted
+        }
+    }
+
     # Set variables from parsed options
     set only_user $params(only-user)
     set remove_user $params(remove-user)
     set invite_user $params(invite)
     set item_type $params(type)
+    set output_format $params(format)
     set dry_run $params(dry-run)
     set read_only $params(read-only)
+    set auto_yes [expr {$params(y) || $params(yes)}]
     set remote_name $params(remote)
     
     # Handle recursive flags and max-depth
@@ -3742,9 +3918,27 @@ proc main {argc argv} {
         puts "Error: --type must be 'folders', 'files', or 'both'"
         exit 1
     }
-    
+
+    # Validate --format values
+    if {$output_format ne "text" && $output_format ne "csv"} {
+        puts "Error: --format must be 'text' or 'csv'"
+        exit 1
+    }
+
+    # Validate --format csv only with default ACL display mode
+    if {$output_format eq "csv" && ($only_user ne "" || $remove_user ne "" || $invite_user ne "")} {
+        puts "Error: --format csv can only be used with default ACL display mode"
+        exit 1
+    }
+
+    # Validate --yes only with --remove-user
+    if {$auto_yes && $remove_user eq ""} {
+        puts "Error: --yes can only be used with --remove-user"
+        exit 1
+    }
+
     # If -r was used without explicit --max-depth, inform user
-    if {$max_depth == 3 && $r_flag_used && !$max_depth_explicit} {
+    if {$max_depth == 3 && $r_flag_used && !$max_depth_explicit && $output_format ne "csv"} {
         puts "ℹ️  Using default max-depth: 3 (use --max-depth N to change)"
         puts ""
     }
@@ -3792,7 +3986,7 @@ proc main {argc argv} {
         }
         lassign $resolve_result access_token item_id item_dict
         
-        remove_user_permissions_cli $item_id $remove_user $max_depth $item_type $dry_run $remote_name
+        remove_user_permissions_cli $item_id $remove_user $max_depth $item_type $dry_run $remote_name $auto_yes
         
     } elseif {$only_user ne ""} {
         # List user access
@@ -3815,27 +4009,34 @@ proc main {argc argv} {
         
     } else {
         # Default: show ACL with new recursive format
-        puts "OneDrive ACL Inspector"
-        puts "Path: $path"
-        puts "Remote: $remote_name"
-        if {$max_depth > 0} {
-            puts "Max depth: $max_depth"
+        global quiet_mode
+        set quiet_mode [expr {$output_format eq "csv"}]
+
+        if {!$quiet_mode} {
+            puts "OneDrive ACL Inspector"
+            puts "Path: $path"
+            puts "Remote: $remote_name"
+            if {$max_depth > 0} {
+                puts "Max depth: $max_depth"
+            }
+            puts ""
         }
-        puts ""
-        
+
         # Get access token with capability detection and auto-refresh
         set result [get_access_token $remote_name "" "detailed" 1]
         set access_token [lindex $result 0]
         set capability [lindex $result 1]
-        
+
         if {$access_token eq ""} {
             puts "❌ Failed to get access token"
             exit 1
         }
-        
-        puts "✅ Using token (capability: $capability)"
-        puts ""
-        
+
+        if {!$quiet_mode} {
+            puts "✅ Using token (capability: $capability)"
+            puts ""
+        }
+
         # Resolve path to item ID using helper function
         set item_result [cli_path_to_item_id_and_dict $path $access_token]
         if {[llength $item_result] == 0} {
@@ -3843,32 +4044,36 @@ proc main {argc argv} {
             exit 1
         }
         lassign $item_result start_id item_dict
-        
+
         # Collect all folder permissions recursively
         set all_folders {}
         set checked_folders {}
         set folders_per_level(0) 0
-        
-        if {$max_depth > 0} {
+
+        if {$max_depth > 0 && !$quiet_mode} {
             puts "🔍 Scanning folder hierarchy (max depth: $max_depth)..."
             puts ""
         }
-        
+
         # max_depth is the maximum depth level to scan (0 = root only, 1 = root + direct children, etc.)
         scan_items_recursive $start_id $access_token $max_depth 0 $path "" checked_folders folders_per_level all_folders "collect_all" "" $item_type
-        
-        if {$max_depth > 0} {
+
+        if {$max_depth > 0 && !$quiet_mode} {
             puts ""
             puts "✅ Scan complete. Scanned [llength $checked_folders] folder(s)."
         }
-        
+
         # Get root permissions
         if {[llength $all_folders] > 0} {
             set root_folder [lindex $all_folders 0]
             set root_permissions [dict get $root_folder permissions]
-            
-            # Display using new recursive format
-            print_recursive_acl $path $root_permissions $all_folders $max_depth
+
+            # Display using selected format
+            if {$output_format eq "csv"} {
+                print_csv_acl $path $root_permissions $all_folders $max_depth
+            } else {
+                print_recursive_acl $path $root_permissions $all_folders $max_depth $item_dict
+            }
         } else {
             puts "❌ No folders found or unable to access permissions"
         }
